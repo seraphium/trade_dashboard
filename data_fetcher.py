@@ -1,7 +1,6 @@
 """
 IBKR Flex API 数据获取模块
 """
-import ibflex
 from ibflex import client, parser
 import pandas as pd
 import streamlit as st
@@ -10,6 +9,7 @@ import logging
 from typing import Optional, Dict, Any
 import yaml
 import os
+import re
 from dotenv import load_dotenv
 
 # 配置日志
@@ -69,29 +69,109 @@ class IBKRDataFetcher:
             
             # 使用 ibflex 库获取数据
             response = client.download(_self.flex_token, _self.query_id)
-            trades_data = parser.parse(response)
+            
+            # 尝试解析数据，如果失败则进行预处理
+            try:
+                trades_data = parser.parse(response)
+            except Exception as parse_error:
+                logger.warning(f"初始解析失败: {parse_error}")
+                logger.info("尝试预处理 XML 数据...")
+                
+                # 预处理 XML 数据，移除可能有问题的属性
+                xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
+                
+                # 移除可能导致问题的属性
+                problematic_attrs = [
+                    'subCategory', 'underlyingConid', 'underlyingSymbol', 
+                    'underlyingSecurityID', 'underlyingListingExchange',
+                    'issuer', 'issuerCountryCode', 'securityIDType',
+                    'cusip', 'isin', 'figi', 'principalAdjustFactor',
+                    'relatedTradeID', 'strike', 'expiry', 'putCall',
+                    'dateTime', 'settleDateTarget', 'tradeMoney',
+                    'netCash', 'closePrice', 'openCloseIndicator',
+                    'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
+                    'origTradePrice', 'origTradeDate', 'origTradeID',
+                    'origOrderID', 'origTransactionID', 'clearingFirmID',
+                    'ibExecID', 'relatedTransactionID', 'rtn',
+                    'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
+                    'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
+                    'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
+                    'levelOfDetail', 'changeInPrice', 'changeInQuantity',
+                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
+                    'initialInvestment', 'serialNumber', 'deliveryType',
+                    'commodityType', 'fineness', 'weight'
+                ]
+                
+                for attr in problematic_attrs:
+                    # 移除属性，但保留核心交易数据
+                    pattern = f' {attr}="[^"]*"'
+                    xml_str = re.sub(pattern, '', xml_str)
+                
+                # 重新尝试解析
+                trades_data = parser.parse(xml_str.encode('utf-8'))
+                logger.info("预处理后解析成功")
+            
+            # 检查数据结构
+            if not hasattr(trades_data, 'FlexStatements') or not trades_data.FlexStatements:
+                logger.warning("未找到 FlexStatements")
+                st.warning("⚠️ API 响应中没有找到数据语句")
+                return pd.DataFrame()
+            
+            # 获取第一个语句
+            stmt = trades_data.FlexStatements[0]
             
             # 如果没有交易数据
-            if not hasattr(trades_data, 'Trades') or not trades_data.Trades:
+            if not hasattr(stmt, 'Trades') or not stmt.Trades:
                 logger.warning("未找到交易数据")
                 st.warning("⚠️ 在指定时间范围内未找到交易记录")
                 return pd.DataFrame()
             
             # 转换为 DataFrame
             trades_list = []
-            for trade in trades_data.Trades:
+            for trade in stmt.Trades:
+                # 安全地获取属性值
+                trade_id = str(getattr(trade, 'tradeID', ''))
+                trade_date = getattr(trade, 'tradeDate', None)
+                trade_time = getattr(trade, 'tradeTime', None)
+                symbol = str(getattr(trade, 'symbol', ''))
+                quantity = getattr(trade, 'quantity', 0)
+                trade_price = getattr(trade, 'tradePrice', 0)
+                currency = str(getattr(trade, 'currency', 'USD'))
+                exchange = str(getattr(trade, 'exchange', ''))
+                
+                # 处理买卖方向
+                buy_sell = getattr(trade, 'buySell', None)
+                if buy_sell and hasattr(buy_sell, 'name'):
+                    side = buy_sell.name  # 'BUY' 或 'SELL'
+                else:
+                    # 后备方案：根据数量正负判断
+                    side = 'BUY' if float(quantity) > 0 else 'SELL'
+                
+                # 创建日期时间
+                datetime_str = None
+                if trade_date and trade_time:
+                    datetime_str = pd.to_datetime(f"{trade_date} {trade_time}")
+                elif trade_date:
+                    datetime_str = pd.to_datetime(str(trade_date))
+                
+                # 处理数值类型（可能是 Decimal）
+                quantity_float = abs(float(quantity)) if quantity else 0
+                price_float = float(trade_price) if trade_price else 0
+                proceeds_float = float(getattr(trade, 'proceeds', 0))
+                commission_float = float(getattr(trade, 'ibCommission', 0))
+                
                 trade_dict = {
-                    'trade_id': trade.tradeID,
-                    'datetime': pd.to_datetime(f"{trade.tradeDate} {trade.tradeTime}"),
-                    'symbol': trade.symbol,
-                    'side': 'BUY' if float(trade.quantity) > 0 else 'SELL',
-                    'quantity': abs(float(trade.quantity)),
-                    'price': float(trade.tradePrice),
-                    'proceeds': float(trade.proceeds if hasattr(trade, 'proceeds') else 0),
-                    'commission': float(trade.commission if hasattr(trade, 'commission') else 0),
-                    'currency': trade.currency if hasattr(trade, 'currency') else 'USD',
-                    'exchange': trade.exchange if hasattr(trade, 'exchange') else '',
-                    'order_time': pd.to_datetime(f"{trade.orderTime}") if hasattr(trade, 'orderTime') else None,
+                    'trade_id': trade_id,
+                    'datetime': datetime_str,
+                    'symbol': symbol,
+                    'side': side,
+                    'quantity': quantity_float,
+                    'price': price_float,
+                    'proceeds': proceeds_float,
+                    'commission': commission_float,
+                    'currency': currency,
+                    'exchange': exchange,
+                    'order_time': None,  # 先简化，可以后续添加
                     'comment': ''  # 初始化评论列
                 }
                 trades_list.append(trade_dict)
@@ -179,25 +259,37 @@ class IBKRDataFetcher:
             if self.validate_config():
                 with st.spinner("正在测试连接..."):
                     try:
-                        response = ibflex.client.download(self.flex_token, self.query_id)
+                        response = client.download(self.flex_token, self.query_id)
                         st.success("✅ API 连接成功")
                         
-                        # 尝试解析响应
                         try:
-                            data = ibflex.parser.parse(response)
+                            data = parser.parse(response)
                             st.success("✅ 数据解析成功")
-                            
-                            # 检查数据内容
-                            if hasattr(data, 'Trades'):
-                                if data.Trades:
-                                    st.success(f"✅ 找到 {len(data.Trades)} 条交易记录")
-                                else:
-                                    st.warning("⚠️ 未找到交易记录（可能是日期范围问题）")
-                            else:
-                                st.warning("⚠️ 响应中没有交易数据部分")
-                                
                         except Exception as parse_error:
-                            st.error(f"❌ 数据解析失败: {parse_error}")
+                            st.warning(f"⚠️ 初始解析失败: {parse_error}")
+                            st.info("正在尝试预处理数据...")
+                            
+                            # 预处理 XML 数据
+                            xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
+                            
+                            # 移除可能导致问题的属性（简化版）
+                            problematic_attrs = ['subCategory', 'underlyingConid', 'underlyingSymbol']
+                            for attr in problematic_attrs:
+                                pattern = f' {attr}="[^"]*"'
+                                xml_str = re.sub(pattern, '', xml_str)
+                            
+                            data = parser.parse(xml_str.encode('utf-8'))
+                            st.success("✅ 预处理后解析成功")
+                        
+                        # 检查数据内容
+                        if hasattr(data, 'FlexStatements') and data.FlexStatements:
+                            stmt = data.FlexStatements[0]
+                            if hasattr(stmt, 'Trades') and stmt.Trades:
+                                st.success(f"✅ 找到 {len(stmt.Trades)} 条交易记录")
+                            else:
+                                st.warning("⚠️ 未找到交易记录（可能是日期范围问题）")
+                        else:
+                            st.warning("⚠️ 响应中没有找到 FlexStatements")
                             
                     except Exception as conn_error:
                         st.error(f"❌ 连接失败: {conn_error}")
@@ -218,17 +310,34 @@ class IBKRDataFetcher:
     def get_account_summary(self) -> Dict[str, Any]:
         """获取账户概要信息"""
         try:
-            response = ibflex.client.download(self.flex_token, self.query_id)
-            data = ibflex.parser.parse(response)
+            response = client.download(self.flex_token, self.query_id)
+            
+            try:
+                data = parser.parse(response)
+            except Exception as parse_error:
+                logger.warning(f"账户信息解析失败，尝试预处理: {parse_error}")
+                
+                # 预处理 XML 数据
+                xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
+                
+                # 移除可能导致问题的属性
+                problematic_attrs = ['subCategory', 'underlyingConid', 'underlyingSymbol']
+                for attr in problematic_attrs:
+                    pattern = f' {attr}="[^"]*"'
+                    xml_str = re.sub(pattern, '', xml_str)
+                
+                data = parser.parse(xml_str.encode('utf-8'))
             
             summary = {}
             if hasattr(data, 'FlexStatements') and data.FlexStatements:
-                for statement in data.FlexStatements:
-                    if hasattr(statement, 'AccountInformation'):
-                        for account in statement.AccountInformation:
-                            summary['account_id'] = account.accountId
-                            summary['base_currency'] = account.baseCurrency
-                            break
+                stmt = data.FlexStatements[0]
+                if hasattr(stmt, 'AccountInformation') and stmt.AccountInformation:
+                    account = stmt.AccountInformation[0]  # 获取第一个账户信息
+                    summary['account_id'] = getattr(account, 'accountId', 'Unknown')
+                    summary['base_currency'] = getattr(account, 'currency', 'USD')
+                    summary['account_type'] = getattr(account, 'accountType', 'Unknown')
+                    summary['last_traded_date'] = getattr(account, 'lastTradedDate', None)
+                    summary['name'] = getattr(account, 'name', 'Unknown')
             
             return summary
         except Exception as e:
@@ -247,21 +356,34 @@ def test_connection(token: str, query_id: str) -> tuple[bool, str]:
             return False, "Token 或 Query ID 未配置"
             
         logger.info(f"测试连接: Token={token[:10]}... Query ID={query_id}")
-        response = ibflex.client.download(token, query_id)
+        response = client.download(token, query_id)
         
-        # 尝试解析响应以验证完整性
         try:
-            data = ibflex.parser.parse(response)
+            data = parser.parse(response)
+        except Exception as parse_error:
+            logger.warning(f"初始解析失败，尝试预处理: {parse_error}")
             
-            # 检查是否包含交易数据
-            if hasattr(data, 'Trades'):
-                trade_count = len(data.Trades) if data.Trades else 0
+            # 预处理 XML 数据
+            xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
+            
+            # 移除可能导致问题的属性
+            problematic_attrs = ['subCategory', 'underlyingConid', 'underlyingSymbol']
+            for attr in problematic_attrs:
+                pattern = f' {attr}="[^"]*"'
+                xml_str = re.sub(pattern, '', xml_str)
+            
+            data = parser.parse(xml_str.encode('utf-8'))
+        
+        # 检查是否包含交易数据
+        if hasattr(data, 'FlexStatements') and data.FlexStatements:
+            stmt = data.FlexStatements[0]
+            if hasattr(stmt, 'Trades'):
+                trade_count = len(stmt.Trades) if stmt.Trades else 0
                 return True, f"连接成功，找到 {trade_count} 条交易记录"
             else:
                 return True, "连接成功，但未找到交易数据部分（请检查 Flex Query 配置）"
-                
-        except Exception as parse_error:
-            return False, f"连接成功但数据解析失败: {parse_error}"
+        else:
+            return True, "连接成功，但响应中没有找到 FlexStatements"
             
     except Exception as e:
         error_msg = str(e)

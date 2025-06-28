@@ -304,7 +304,7 @@ def show_trades_table():
     df = st.session_state.trades_df.copy()
     
     # 过滤控件
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         symbols = ['全部'] + sorted(df['symbol'].unique().tolist())
@@ -315,9 +315,13 @@ def show_trades_table():
         selected_side = st.selectbox("买卖方向", sides)
     
     with col3:
-        min_price = st.number_input("最低价格", value=0.0, step=0.01)
+        categories = ['全部', 'Good', 'Bad', 'Neutral']
+        selected_category = st.selectbox("评论分类", categories)
     
     with col4:
+        min_price = st.number_input("最低价格", value=0.0, step=0.01)
+    
+    with col5:
         search_text = st.text_input("搜索评论", placeholder="输入关键词...")
     
     # 应用过滤
@@ -326,6 +330,9 @@ def show_trades_table():
     
     if selected_side != '全部':
         df = df[df['side'] == selected_side]
+    
+    if selected_category != '全部':
+        df = df[df['comment_category'] == selected_category]
     
     if min_price > 0:
         df = df[df['price'] >= min_price]
@@ -338,7 +345,7 @@ def show_trades_table():
     # 可编辑的数据表格
     if not df.empty:
         # 重新排列列的顺序，让评论列更明显
-        display_columns = ['datetime', 'symbol', 'side', 'quantity', 'price', 'proceeds', 'commission', 'comment']
+        display_columns = ['datetime', 'symbol', 'side', 'quantity', 'price', 'proceeds', 'commission', 'comment', 'comment_category']
         display_df = df[display_columns].copy()
         
         # 格式化显示
@@ -363,6 +370,12 @@ def show_trades_table():
                     help="添加您的交易评论",
                     max_chars=500,
                     width="medium"
+                ),
+                "comment_category": st.column_config.SelectboxColumn(
+                    "评论分类",
+                    help="选择评论分类",
+                    options=["Good", "Bad", "Neutral"],
+                    width="small"
                 )
             },
             disabled=["datetime", "symbol", "side", "quantity", "price", "proceeds", "commission"],
@@ -374,26 +387,44 @@ def show_trades_table():
         # 保存评论按钮
         col1, col2 = st.columns([1, 4])
         with col1:
-            if st.button("💾 保存评论", use_container_width=True):
+            if st.button("💾 保存更改", use_container_width=True):
                 # 比较原始数据和编辑后的数据
                 original_comments = dict(zip(df['trade_id'], df['comment']))
                 edited_comments = dict(zip(df['trade_id'], edited_df['comment']))
                 
-                updates = {}
+                original_categories = dict(zip(df['trade_id'], df['comment_category']))
+                edited_categories = dict(zip(df['trade_id'], edited_df['comment_category']))
+                
+                comment_updates = {}
+                category_updates = {}
+                
                 for trade_id in original_comments:
                     if original_comments[trade_id] != edited_comments[trade_id]:
-                        updates[trade_id] = edited_comments[trade_id]
+                        comment_updates[trade_id] = edited_comments[trade_id]
+                    if original_categories[trade_id] != edited_categories[trade_id]:
+                        category_updates[trade_id] = edited_categories[trade_id]
                 
-                if updates:
-                    if st.session_state.comment_manager.bulk_update_comments(updates):
-                        st.success(f"✅ 成功更新 {len(updates)} 条评论")
-                        # 重新加载数据
-                        st.session_state.trades_df = st.session_state.comment_manager.merge_comments_with_trades(
-                            st.session_state.trades_df
-                        )
-                        st.rerun()
+                total_updates = 0
+                
+                if comment_updates:
+                    if st.session_state.comment_manager.bulk_update_comments(comment_updates):
+                        total_updates += len(comment_updates)
                     else:
-                        st.error("❌ 保存失败")
+                        st.error("❌ 评论保存失败")
+                        
+                if category_updates:
+                    if st.session_state.comment_manager.bulk_update_categories(category_updates):
+                        total_updates += len(category_updates)
+                    else:
+                        st.error("❌ 分类保存失败")
+                
+                if total_updates > 0:
+                    st.success(f"✅ 成功更新 {len(comment_updates)} 条评论和 {len(category_updates)} 条分类")
+                    # 重新加载数据
+                    st.session_state.trades_df = st.session_state.comment_manager.merge_comments_with_trades(
+                        st.session_state.trades_df
+                    )
+                    st.rerun()
                 else:
                     st.info("没有需要保存的更改")
         

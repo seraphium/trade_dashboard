@@ -217,8 +217,29 @@ class ChartGenerator:
             )
             return fig
         
+        # 定义颜色映射
+        color_map = {
+            'Good': '#2ECC71',    # 绿色
+            'Bad': '#E74C3C',     # 红色
+            'Neutral': '#95A5A6'  # 灰色
+        }
+        
+        # 按顺序排列分类
+        category_order = ['Good', 'Bad', 'Neutral']
+        ordered_categories = [cat for cat in category_order if cat in category_stats.index]
+        
+        colors = [color_map.get(cat, '#3498DB') for cat in ordered_categories]
+        values = [category_stats.get(cat, 0) for cat in ordered_categories]
+        
         fig = go.Figure(data=[
-            go.Bar(x=category_stats.index, y=category_stats.values)
+            go.Bar(
+                x=ordered_categories, 
+                y=values,
+                marker_color=colors,
+                text=values,
+                textposition='auto',
+                hovertemplate='分类: %{x}<br>数量: %{y}<extra></extra>'
+            )
         ])
         
         fig.update_layout(
@@ -226,7 +247,8 @@ class ChartGenerator:
             xaxis_title="评论分类",
             yaxis_title="数量",
             template=self.theme,
-            height=400
+            height=400,
+            showlegend=False
         )
         
         return fig

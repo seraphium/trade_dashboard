@@ -75,9 +75,7 @@ class BenchmarkDataFetcher:
                     end=end_date,
                     interval="1d",
                     auto_adjust=True,
-                    prepost=False,
-                    threads=False,  # 改为 False 提高稳定性
-                    proxy=None
+                    prepost=False
                 )
                 
                 if hist.empty:
@@ -257,12 +255,12 @@ class BenchmarkDataFetcher:
             # 尝试获取一个简单的数据来测试连接
             session = setup_yfinance_session()
             ticker = yf.Ticker("SPY", session=session)  # 使用 SPY 代替 AAPL
-            hist = ticker.history(period="5d", threads=False)
+            hist = ticker.history(period="5d")
             
             # 如果 SPY 失败，尝试其他符号
             if hist.empty:
                 ticker = yf.Ticker("QQQ", session=session)
-                hist = ticker.history(period="5d", threads=False)
+                hist = ticker.history(period="5d")
             
             return not hist.empty
         except Exception as e:

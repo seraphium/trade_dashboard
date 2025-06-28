@@ -46,7 +46,7 @@ class CommentManager:
             st.error(f"❌ 保存评论失败: {str(e)}")
             return False
     
-    def add_comment(self, trade_id: str, comment: str, category: str = "一般") -> bool:
+    def add_comment(self, trade_id: str, comment: str, category: str = "Neutral") -> bool:
         """添加或更新评论"""
         try:
             self.comments[trade_id] = {
@@ -67,7 +67,7 @@ class CommentManager:
     
     def get_comment_category(self, trade_id: str) -> str:
         """获取指定交易的评论分类"""
-        return self.comments.get(trade_id, {}).get('category', '一般')
+        return self.comments.get(trade_id, {}).get('category', 'Neutral')
     
     def delete_comment(self, trade_id: str) -> bool:
         """删除评论"""
@@ -118,13 +118,45 @@ class CommentManager:
             logger.error(f"导出评论失败: {str(e)}")
             return ""
     
+    def update_category(self, trade_id: str, category: str) -> bool:
+        """更新指定交易的评论分类"""
+        try:
+            if trade_id in self.comments:
+                self.comments[trade_id]['category'] = category
+                self.comments[trade_id]['updated_at'] = datetime.now().isoformat()
+            else:
+                # 如果评论不存在，创建一个只有分类的空评论
+                self.comments[trade_id] = {
+                    'trade_id': trade_id,
+                    'comment': '',
+                    'category': category,
+                    'timestamp': datetime.now().isoformat(),
+                    'updated_at': datetime.now().isoformat()
+                }
+            return self.save_comments()
+        except Exception as e:
+            logger.error(f"更新分类失败: {str(e)}")
+            return False
+
     def bulk_update_comments(self, updates: Dict[str, str]) -> bool:
         """批量更新评论"""
         try:
             for trade_id, comment in updates.items():
                 if comment.strip():  # 只更新非空评论
-                    self.add_comment(trade_id, comment.strip())
+                    # 保持原有的category
+                    current_category = self.get_comment_category(trade_id)
+                    self.add_comment(trade_id, comment.strip(), current_category)
             return True
         except Exception as e:
             logger.error(f"批量更新评论失败: {str(e)}")
+            return False
+
+    def bulk_update_categories(self, updates: Dict[str, str]) -> bool:
+        """批量更新评论分类"""
+        try:
+            for trade_id, category in updates.items():
+                self.update_category(trade_id, category)
+            return True
+        except Exception as e:
+            logger.error(f"批量更新分类失败: {str(e)}")
             return False 
