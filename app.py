@@ -165,13 +165,13 @@ def main():
             else:
                 st.error("请先配置 API 信息")
         
-        # yfinance 连接测试
-        if st.button("🔗 测试 yfinance 连接", use_container_width=True):
+        # Financial Datasets API 连接测试
+        if st.button("🔗 测试 Financial Datasets API 连接", use_container_width=True):
             with st.spinner("正在测试连接..."):
-                if st.session_state.benchmark_fetcher.test_yfinance_connection():
-                    st.success("✅ yfinance 连接正常")
+                if st.session_state.benchmark_fetcher.test_api_connection():
+                    st.success("✅ Financial Datasets API 连接正常")
                 else:
-                    st.error("❌ yfinance 连接失败，请检查网络或稍后重试")
+                    st.error("❌ Financial Datasets API 连接失败，请检查API密钥配置")
         
         # 数据源选择
         use_mock_data = st.checkbox(
@@ -203,9 +203,9 @@ def main():
                         
                 else:
                     # 使用真实数据
-                    if not st.session_state.benchmark_fetcher.test_yfinance_connection():
-                        st.error("❌ yfinance 连接失败，无法获取基准数据")
-                        st.info("💡 提示：这可能是网络问题或 Yahoo Finance 服务临时不可用。您可以尝试使用模拟数据进行演示。")
+                    if not st.session_state.benchmark_fetcher.test_api_connection():
+                        st.error("❌ Financial Datasets API 连接失败，无法获取基准数据")
+                        st.info("💡 提示：请检查您的API密钥配置。您也可以使用模拟数据进行演示。")
                     else:
                         benchmark_data = st.session_state.benchmark_fetcher.get_multiple_benchmarks(
                             selected_benchmarks,

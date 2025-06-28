@@ -346,9 +346,9 @@ class ChartGenerator:
             
             # 设置y轴标签
             if metric_key in ['total_return', 'volatility', 'max_drawdown']:
-                fig.update_yaxis(title_text="%", row=row, col=col)
+                fig.update_yaxes(title_text="%", row=row, col=col)
             else:  # sharpe_ratio
-                fig.update_yaxis(title_text="比率", row=row, col=col)
+                fig.update_yaxes(title_text="比率", row=row, col=col)
         
         fig.update_layout(
             title="表现指标对比",

@@ -63,7 +63,13 @@ pip install -r requirements.txt
    ```
    IBKR_FLEX_TOKEN=your_actual_flex_token_here
    IBKR_QUERY_ID=your_actual_query_id_here
+   FINANCIAL_DATASETS_API_KEY=your_financial_datasets_api_key_here
    ```
+
+3. 获取 Financial Datasets API 密钥：
+   - 访问 [Financial Datasets](https://financialdatasets.ai)
+   - 创建账户并获取 API 密钥
+   - 将密钥填入 `.env` 文件中
 
 **方式二：使用 config.yaml 文件**
 
@@ -72,6 +78,9 @@ pip install -r requirements.txt
 ibkr:
   flex_token: "YOUR_FLEX_TOKEN_HERE"  # 替换为您的 Flex Token
   query_id: "YOUR_QUERY_ID_HERE"     # 替换为您的 Query ID
+
+financial_datasets:
+  api_key: "YOUR_FINANCIAL_DATASETS_API_KEY_HERE"  # 替换为您的 Financial Datasets API 密钥
 ```
 
 > **注意：** 如果同时存在 `.env` 和 `config.yaml`，系统将优先使用 `.env` 文件中的配置。
@@ -210,6 +219,7 @@ charts:
 ```bash
 export IBKR_FLEX_TOKEN="your_token_here"
 export IBKR_QUERY_ID="your_query_id_here"
+export FINANCIAL_DATASETS_API_KEY="your_api_key_here"
 streamlit run app.py
 ```
 
@@ -228,15 +238,23 @@ streamlit run app.py
    - 验证 Query 状态是否为激活状态
 
 3. **基准数据获取失败**
-   - **问题现象**: 显示 "Failed to get ticker" 或 "No timezone found" 错误
+   - **问题现象**: 显示 API 连接失败或认证错误
    - **解决方案**:
-     1. 点击 "🔗 测试 yfinance 连接" 按钮检查网络状态
-     2. 如果连接失败，可以勾选 "🧪 使用模拟数据（演示模式）" 进行功能演示
-     3. 检查网络连接，确保能访问 Yahoo Finance
-     4. 尝试稍后重试（可能是服务临时不可用）
-     5. 手动测试命令：
+     1. 点击 "🔗 测试 Financial Datasets API 连接" 按钮检查连接状态
+     2. 检查 API 密钥是否正确配置在 `.env` 文件中
+     3. 确认 Financial Datasets API 账户余额和权限
+     4. 如果API连接失败，可以勾选 "🧪 使用模拟数据（演示模式）" 进行功能演示
+     5. 验证网络连接，确保能访问 financialdatasets.ai
+     6. 手动测试 API 连接：
         ```bash
-        python -c "import yfinance as yf; print(yf.Ticker('SPY').history(period='5d'))"
+        # 设置您的API密钥
+        export FINANCIAL_DATASETS_API_KEY="your_api_key_here"
+        python -c "
+        import requests
+        headers = {'X-API-KEY': 'your_api_key_here'}
+        response = requests.get('https://api.financialdatasets.ai/prices?ticker=SPY&interval=day&limit=1', headers=headers)
+        print(response.status_code, response.text[:200])
+        "
         ```
 
 4. **评论保存失败**
@@ -245,12 +263,14 @@ streamlit run app.py
 
 ### 基准数据功能说明
 
-**🆚 基准对比** 功能依赖于 `yfinance` 库从 Yahoo Finance 获取数据：
+**🆚 基准对比** 功能使用 Financial Datasets API 获取高质量的市场数据：
 
 - **实时数据**: 获取真实的市场指数数据（SPY、QQQ 等）
-- **模拟数据**: 如果网络连接有问题，可使用模拟数据进行功能演示
+- **高质量数据**: Financial Datasets API 提供更稳定可靠的金融数据服务
+- **模拟数据**: 如果 API 连接有问题，可使用模拟数据进行功能演示
 - **重试机制**: 自动重试失败的数据获取，提高成功率
 - **多指数支持**: 支持同时获取多个基准指数进行对比
+- **API 优势**: 相比传统的网页抓取方式，API 访问更稳定，数据质量更高
 
 ### 日志查看
 
