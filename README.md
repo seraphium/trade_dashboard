@@ -50,21 +50,49 @@ pip install -r requirements.txt
 
 #### 3.3 配置应用
 
-编辑 `config.yaml` 文件：
+有两种配置方式（推荐使用 `.env` 文件）：
 
+**方式一：使用 .env 文件（推荐）**
+
+1. 复制 `env.example` 文件为 `.env`：
+   ```bash
+   cp env.example .env
+   ```
+
+2. 编辑 `.env` 文件：
+   ```
+   IBKR_FLEX_TOKEN=your_actual_flex_token_here
+   IBKR_QUERY_ID=your_actual_query_id_here
+   ```
+
+**方式二：使用 config.yaml 文件**
+
+编辑 `config.yaml` 文件：
 ```yaml
 ibkr:
   flex_token: "YOUR_FLEX_TOKEN_HERE"  # 替换为您的 Flex Token
   query_id: "YOUR_QUERY_ID_HERE"     # 替换为您的 Query ID
 ```
 
+> **注意：** 如果同时存在 `.env` 和 `config.yaml`，系统将优先使用 `.env` 文件中的配置。
+
 ### 4. 运行应用
+
+推荐使用启动脚本：
+
+```bash
+python start_app.py
+```
+
+或者直接使用 streamlit：
 
 ```bash
 streamlit run app.py
 ```
 
 应用将在浏览器中自动打开，通常地址为 `http://localhost:8501`
+
+> **提示**: 启动脚本会自动检查依赖并提供更友好的错误提示
 
 ## 📖 使用指南
 
@@ -124,9 +152,13 @@ trade_dashboard/
 ├── data_fetcher.py        # IBKR 数据获取模块
 ├── comment_manager.py     # 评论管理模块
 ├── chart_utils.py         # 图表工具模块
+├── benchmark_data.py      # 基准指数数据获取模块
 ├── config.yaml           # 配置文件
+├── config.example.yaml   # 配置文件示例
+├── env.example           # 环境变量配置示例
 ├── requirements.txt      # Python 依赖
 ├── README.md            # 说明文档
+├── .gitignore           # Git 忽略文件
 ├── trade_comments.json  # 评论数据（运行时生成）
 └── flex_trade_dashboard_spec.md  # 需求规格文档
 ```
@@ -134,7 +166,10 @@ trade_dashboard/
 ## ⚠️ 注意事项
 
 1. **API 限制**: IBKR Flex API 有访问频率限制，请避免频繁刷新数据
-2. **数据安全**: 配置文件包含敏感信息，请勿分享或提交到版本控制
+2. **数据安全**: 
+   - `.env` 和 `config.yaml` 文件包含敏感的 API 信息，请勿分享或提交到版本控制
+   - `.env` 文件已自动添加到 `.gitignore` 中
+   - 建议使用 `.env` 文件而非 `config.yaml` 来存储敏感信息
 3. **盈亏计算**: 图表中的盈亏计算是简化版本，实际盈亏请以券商结算为准
 4. **数据备份**: 建议定期备份 `trade_comments.json` 文件
 
@@ -162,32 +197,60 @@ charts:
   theme: "plotly_dark"  # 或 "plotly_white"
 ```
 
-### 环境变量
+### 配置优先级
 
-您也可以通过环境变量设置 API 配置：
+应用程序按以下优先级加载配置：
+
+1. **环境变量**（最高优先级）
+2. **`.env` 文件**
+3. **`config.yaml` 文件**（最低优先级）
+
+您可以通过环境变量临时覆盖配置：
 
 ```bash
 export IBKR_FLEX_TOKEN="your_token_here"
 export IBKR_QUERY_ID="your_query_id_here"
+streamlit run app.py
 ```
 
 ## 🐛 故障排除
 
 ### 常见问题
 
-1. **连接失败**
+1. **IBKR 连接失败**
    - 检查 Flex Token 和 Query ID 是否正确
    - 确认 IBKR 账户是否有 Flex Query 权限
    - 检查网络连接
 
-2. **无数据返回**
+2. **无交易数据返回**
    - 确认 Flex Query 包含 "Trades" 数据
    - 检查查询的时间范围是否包含交易记录
    - 验证 Query 状态是否为激活状态
 
-3. **评论保存失败**
+3. **基准数据获取失败**
+   - **问题现象**: 显示 "Failed to get ticker" 或 "No timezone found" 错误
+   - **解决方案**:
+     1. 点击 "🔗 测试 yfinance 连接" 按钮检查网络状态
+     2. 如果连接失败，可以勾选 "🧪 使用模拟数据（演示模式）" 进行功能演示
+     3. 检查网络连接，确保能访问 Yahoo Finance
+     4. 尝试稍后重试（可能是服务临时不可用）
+     5. 手动测试命令：
+        ```bash
+        python -c "import yfinance as yf; print(yf.Ticker('SPY').history(period='5d'))"
+        ```
+
+4. **评论保存失败**
    - 检查文件写入权限
    - 确认磁盘空间充足
+
+### 基准数据功能说明
+
+**🆚 基准对比** 功能依赖于 `yfinance` 库从 Yahoo Finance 获取数据：
+
+- **实时数据**: 获取真实的市场指数数据（SPY、QQQ 等）
+- **模拟数据**: 如果网络连接有问题，可使用模拟数据进行功能演示
+- **重试机制**: 自动重试失败的数据获取，提高成功率
+- **多指数支持**: 支持同时获取多个基准指数进行对比
 
 ### 日志查看
 

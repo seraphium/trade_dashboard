@@ -69,13 +69,27 @@ def main():
             
             if st.button("测试连接"):
                 if flex_token and query_id:
-                    if test_connection(flex_token, query_id):
-                        st.success("✅ 连接成功！")
-                        # 临时更新配置
-                        st.session_state.data_fetcher.flex_token = flex_token
-                        st.session_state.data_fetcher.query_id = query_id
-                    else:
-                        st.error("❌ 连接失败，请检查配置")
+                    with st.spinner("正在测试连接..."):
+                        success, message = test_connection(flex_token, query_id)
+                        if success:
+                            st.success(f"✅ {message}")
+                            # 临时更新配置
+                            st.session_state.data_fetcher.flex_token = flex_token
+                            st.session_state.data_fetcher.query_id = query_id
+                        else:
+                            st.error(f"❌ {message}")
+                            
+                            # 如果是1020错误，显示详细解决方案
+                            if "1020" in message:
+                                st.markdown("""
+                                **🔧 错误 1020 解决步骤：**
+                                1. 登录 [IBKR 账户管理](https://www.interactivebrokers.com)
+                                2. 导航到 Reports → Flex Queries
+                                3. 检查您的 Flex Query 状态是否为 "Active"
+                                4. 确认 Query 包含 "Trades" 数据部分
+                                5. 重新生成 Flex Token
+                                6. 确保复制的 Token 和 Query ID 没有多余的空格
+                                """)
                 else:
                     st.warning("请输入完整的配置信息")
         else:
@@ -151,20 +165,67 @@ def main():
             else:
                 st.error("请先配置 API 信息")
         
+        # yfinance 连接测试
+        if st.button("🔗 测试 yfinance 连接", use_container_width=True):
+            with st.spinner("正在测试连接..."):
+                if st.session_state.benchmark_fetcher.test_yfinance_connection():
+                    st.success("✅ yfinance 连接正常")
+                else:
+                    st.error("❌ yfinance 连接失败，请检查网络或稍后重试")
+        
+        # 数据源选择
+        use_mock_data = st.checkbox(
+            "🧪 使用模拟数据（演示模式）",
+            help="如果网络连接有问题，可以使用模拟数据进行功能演示"
+        )
+        
         # 获取基准数据按钮
         if selected_benchmarks and st.button("📈 获取基准数据", use_container_width=True):
             with st.spinner("正在获取基准指数数据..."):
-                benchmark_data = st.session_state.benchmark_fetcher.get_multiple_benchmarks(
-                    selected_benchmarks,
-                    start_date.strftime("%Y-%m-%d"),
-                    end_date.strftime("%Y-%m-%d")
-                )
-                st.session_state.benchmark_data = benchmark_data
-                
-                if benchmark_data:
-                    st.success(f"✅ 成功获取 {len(benchmark_data)} 个基准指数数据")
+                if use_mock_data:
+                    # 使用模拟数据
+                    st.info("📊 使用模拟数据进行演示")
+                    benchmark_data = {}
+                    for symbol in selected_benchmarks:
+                        mock_data = st.session_state.benchmark_fetcher.generate_mock_benchmark_data(
+                            symbol,
+                            start_date.strftime("%Y-%m-%d"),
+                            end_date.strftime("%Y-%m-%d")
+                        )
+                        if not mock_data.empty:
+                            benchmark_data[symbol] = mock_data
+                    
+                    st.session_state.benchmark_data = benchmark_data
+                    if benchmark_data:
+                        st.success(f"✅ 生成了 {len(benchmark_data)} 个基准指数的模拟数据: {', '.join(benchmark_data.keys())}")
+                    else:
+                        st.error("❌ 生成模拟数据失败")
+                        
                 else:
-                    st.warning("未获取到基准数据")
+                    # 使用真实数据
+                    if not st.session_state.benchmark_fetcher.test_yfinance_connection():
+                        st.error("❌ yfinance 连接失败，无法获取基准数据")
+                        st.info("💡 提示：这可能是网络问题或 Yahoo Finance 服务临时不可用。您可以尝试使用模拟数据进行演示。")
+                    else:
+                        benchmark_data = st.session_state.benchmark_fetcher.get_multiple_benchmarks(
+                            selected_benchmarks,
+                            start_date.strftime("%Y-%m-%d"),
+                            end_date.strftime("%Y-%m-%d")
+                        )
+                        st.session_state.benchmark_data = benchmark_data
+                        
+                        successful_symbols = [symbol for symbol, data in benchmark_data.items() if not data.empty]
+                        failed_symbols = [symbol for symbol in selected_benchmarks if symbol not in successful_symbols]
+                        
+                        if successful_symbols:
+                            st.success(f"✅ 成功获取 {len(successful_symbols)} 个基准指数数据: {', '.join(successful_symbols)}")
+                        
+                        if failed_symbols:
+                            st.warning(f"⚠️ 以下基准指数获取失败: {', '.join(failed_symbols)}")
+                            st.info("💡 提示：可以尝试重新获取或选择其他基准指数，或者使用模拟数据进行演示")
+                        
+                        if not benchmark_data:
+                            st.error("❌ 未能获取任何基准数据")
         
         st.markdown("---")
         
