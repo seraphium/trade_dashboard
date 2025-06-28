@@ -1,0 +1,29 @@
+# IBKR Flex API 配置示例
+# 复制此文件为 config.yaml 并填入您的真实配置信息
+
+# IBKR Flex API Configuration
+ibkr:
+  # 您需要在 IBKR 账户管理中创建 Flex Query 并获取以下信息
+  flex_token: ""  # 您的 Flex Web Service Token (必填)
+  query_id: ""    # 您的 Query ID (必填)
+  
+# 应用配置
+app:
+  title: "交易复盘分析平台"
+  page_icon: "📈"
+  layout: "wide"
+  
+# 数据设置
+data:
+  comments_file: "trade_comments.json"  # 评论保存文件
+  cache_timeout: 3600  # 数据缓存时间（秒）
+  
+# 图表设置
+charts:
+  default_height: 600
+  theme: "plotly_white"  # 可选: "plotly_white" 或 "plotly_dark"
+
+# 配置说明:
+# 1. flex_token: 从 IBKR 账户管理 → Reports → Flex Queries → Generate Token 获取
+# 2. query_id: 创建 Flex Query 后获得的 ID
+# 3. 其他配置项可根据需要调整 
