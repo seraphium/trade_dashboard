@@ -47,6 +47,61 @@ class IBKRDataFetcher:
             return False
         return True
     
+    def _download_with_retry(self, token: str, query_id: str, max_retries: int = 3, delay: float = 2.0):
+        """
+        带重试机制的数据下载
+        
+        Args:
+            token: Flex Token
+            query_id: Query ID  
+            max_retries: 最大重试次数
+            delay: 重试间隔(秒)
+            
+        Returns:
+            API响应数据
+        """
+        import time
+        import ssl
+        import urllib3
+        from urllib3.exceptions import SSLError as Urllib3SSLError
+        
+        last_error = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                if attempt > 0:
+                    logger.info(f"重试获取数据，第 {attempt}/{max_retries} 次")
+                    time.sleep(delay * attempt)  # 递增延时
+                
+                # 使用 ibflex 库获取数据
+                response = client.download(token, query_id)
+                logger.info("数据获取成功")
+                return response
+                
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                
+                # 判断是否为网络相关错误，值得重试
+                is_retryable = any([
+                    "ssl" in error_str,
+                    "eof occurred" in error_str,
+                    "connection" in error_str,
+                    "timeout" in error_str,
+                    "network" in error_str,
+                    "max retries exceeded" in error_str
+                ])
+                
+                if not is_retryable or attempt >= max_retries:
+                    # 不可重试的错误或达到最大重试次数
+                    logger.error(f"获取数据失败 (尝试 {attempt + 1}/{max_retries + 1}): {str(e)}")
+                    raise e
+                else:
+                    logger.warning(f"网络错误，将重试 (尝试 {attempt + 1}/{max_retries + 1}): {str(e)}")
+                    
+        # 如果所有重试都失败了
+        raise last_error if last_error else Exception("未知错误")
+    
     @st.cache_data(ttl=3600)  # 缓存1小时
     def fetch_trades(_self, start_date: str = None, end_date: str = None) -> pd.DataFrame:
         """
@@ -67,8 +122,8 @@ class IBKRDataFetcher:
             logger.info(f"正在获取交易数据: {start_date} 到 {end_date}")
             logger.info(f"使用 Token: {_self.flex_token[:10]}... 和 Query ID: {_self.query_id}")
             
-            # 使用 ibflex 库获取数据
-            response = client.download(_self.flex_token, _self.query_id)
+            # 使用重试机制获取数据
+            response = _self._download_with_retry(_self.flex_token, _self.query_id)
             
             # 尝试解析数据，如果失败则进行预处理
             try:
@@ -230,9 +285,31 @@ class IBKRDataFetcher:
             if st.button("🔍 运行诊断测试"):
                 self._run_diagnostics()
                 
-        elif "network" in error_msg.lower() or "connection" in error_msg.lower():
+        elif "network" in error_msg.lower() or "connection" in error_msg.lower() or "SSL" in error_msg or "EOF occurred" in error_msg:
             st.error("🌐 **网络连接问题**")
-            st.info("请检查网络连接，确保能够访问 IBKR 服务器")
+            st.markdown("""
+            **SSL连接问题解决方案：**
+            
+            1. **检查网络连接**
+               - 确保网络连接稳定
+               - 尝试刷新页面重新获取数据
+            
+            2. **SSL协议问题**
+               - 这是IBKR服务器SSL连接中断的常见问题
+               - 通常是暂时性的，请稍等几分钟后重试
+            
+            3. **代理或防火墙**
+               - 如果使用公司网络，可能被防火墙阻挡
+               - 尝试使用不同的网络环境
+            
+            4. **请求频率限制**
+               - IBKR可能限制了请求频率
+               - 等待1-2分钟后重新尝试
+            """)
+            
+            # 提供重试按钮
+            if st.button("🔄 重新尝试获取数据", key="retry_ssl"):
+                st.rerun()
             
         else:
             st.error("❓ **未知错误**")
@@ -259,7 +336,7 @@ class IBKRDataFetcher:
             if self.validate_config():
                 with st.spinner("正在测试连接..."):
                     try:
-                        response = client.download(self.flex_token, self.query_id)
+                        response = self._download_with_retry(self.flex_token, self.query_id)
                         st.success("✅ API 连接成功")
                         
                         try:
@@ -310,7 +387,7 @@ class IBKRDataFetcher:
     def get_account_summary(self) -> Dict[str, Any]:
         """获取账户概要信息"""
         try:
-            response = client.download(self.flex_token, self.query_id)
+            response = self._download_with_retry(self.flex_token, self.query_id)
             
             try:
                 data = parser.parse(response)
@@ -344,6 +421,323 @@ class IBKRDataFetcher:
             logger.error(f"获取账户信息失败: {str(e)}")
             return {}
 
+    @st.cache_data(ttl=3600)  # 缓存1小时
+    def fetch_nav_data(_self, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """
+        获取每日净资产价值(NAV)数据
+        
+        Args:
+            start_date: 开始日期 (YYYY-MM-DD)
+            end_date: 结束日期 (YYYY-MM-DD)
+            
+        Returns:
+            DataFrame: NAV数据，包含日期和净资产价值
+        """
+        if not _self.validate_config():
+            st.error("❌ 请先配置 IBKR API 信息")
+            return pd.DataFrame()
+        
+        try:
+            logger.info(f"正在获取NAV数据: {start_date} 到 {end_date}")
+            
+            # 使用重试机制获取数据
+            response = _self._download_with_retry(_self.flex_token, _self.query_id)
+            
+            # 解析数据
+            try:
+                nav_data = parser.parse(response)
+            except Exception as parse_error:
+                logger.warning(f"NAV数据解析失败，尝试预处理: {parse_error}")
+                
+                # 预处理 XML 数据
+                xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
+                
+                # 移除可能导致问题的属性
+                problematic_attrs = ['subCategory', 'underlyingConid', 'underlyingSymbol']
+                for attr in problematic_attrs:
+                    pattern = f' {attr}="[^"]*"'
+                    xml_str = re.sub(pattern, '', xml_str)
+                
+                nav_data = parser.parse(xml_str.encode('utf-8'))
+            
+            # 检查数据结构
+            if not hasattr(nav_data, 'FlexStatements') or not nav_data.FlexStatements:
+                logger.warning("未找到 FlexStatements")
+                return pd.DataFrame()
+            
+            stmt = nav_data.FlexStatements[0]
+            
+            # 查找NAV数据（可能在不同节点中）
+            nav_list = []
+            
+            # 检查 NetAssetValue 节点
+            if hasattr(stmt, 'NetAssetValue') and stmt.NetAssetValue:
+                for nav_item in stmt.NetAssetValue:
+                    nav_dict = {
+                        'reportDate': getattr(nav_item, 'reportDate', None),
+                        'total': getattr(nav_item, 'total', 0),
+                        'currency': getattr(nav_item, 'currency', 'USD')
+                    }
+                    nav_list.append(nav_dict)
+            
+            # 如果没有专门的NAV数据，尝试从其他节点推导
+            elif hasattr(stmt, 'Trades') or hasattr(stmt, 'CashTransactions'):
+                # 可以从持仓和现金数据计算NAV，这里先返回空数据
+                logger.warning("未找到专门的NAV数据，需要通过其他方式计算")
+                return pd.DataFrame(columns=['reportDate', 'total', 'currency'])
+            
+            if not nav_list:
+                logger.warning("未找到NAV数据")
+                return pd.DataFrame(columns=['reportDate', 'total', 'currency'])
+            
+            df = pd.DataFrame(nav_list)
+            
+            # 数据清理
+            df['reportDate'] = pd.to_datetime(df['reportDate'])
+            df['total'] = pd.to_numeric(df['total'], errors='coerce')
+            
+            # 按时间过滤
+            if start_date:
+                df = df[df['reportDate'] >= pd.to_datetime(start_date)]
+            if end_date:
+                df = df[df['reportDate'] <= pd.to_datetime(end_date)]
+            
+            # 排序
+            df = df.sort_values('reportDate', ascending=True)
+            
+            logger.info(f"成功获取 {len(df)} 条NAV记录")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取NAV数据失败: {e}")
+            st.error(f"❌ 获取NAV数据失败: {e}")
+            return pd.DataFrame()
+    
+    @st.cache_data(ttl=3600)  # 缓存1小时
+    def fetch_cash_transactions(_self, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """
+        获取现金流数据
+        
+        Args:
+            start_date: 开始日期 (YYYY-MM-DD)
+            end_date: 结束日期 (YYYY-MM-DD)
+            
+        Returns:
+            DataFrame: 现金流数据
+        """
+        if not _self.validate_config():
+            st.error("❌ 请先配置 IBKR API 信息")
+            return pd.DataFrame()
+        
+        try:
+            logger.info(f"正在获取现金流数据: {start_date} 到 {end_date}")
+            
+            response = _self._download_with_retry(_self.flex_token, _self.query_id)
+            
+            try:
+                cash_data = parser.parse(response)
+            except Exception as parse_error:
+                logger.warning(f"现金流数据解析失败，尝试预处理: {parse_error}")
+                
+                xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
+                
+                problematic_attrs = ['subCategory', 'underlyingConid', 'underlyingSymbol']
+                for attr in problematic_attrs:
+                    pattern = f' {attr}="[^"]*"'
+                    xml_str = re.sub(pattern, '', xml_str)
+                
+                cash_data = parser.parse(xml_str.encode('utf-8'))
+            
+            if not hasattr(cash_data, 'FlexStatements') or not cash_data.FlexStatements:
+                logger.warning("未找到 FlexStatements")
+                return pd.DataFrame()
+            
+            stmt = cash_data.FlexStatements[0]
+            
+            cash_list = []
+            
+            # 检查 CashTransactions 节点
+            if hasattr(stmt, 'CashTransactions') and stmt.CashTransactions:
+                for cash_item in stmt.CashTransactions:
+                    cash_dict = {
+                        'reportDate': getattr(cash_item, 'reportDate', None),
+                        'dateTime': getattr(cash_item, 'dateTime', None),
+                        'amount': getattr(cash_item, 'amount', 0),
+                        'currency': getattr(cash_item, 'currency', 'USD'),
+                        'type': getattr(cash_item, 'type', ''),
+                        'activityDescription': getattr(cash_item, 'activityDescription', ''),
+                        'symbol': getattr(cash_item, 'symbol', ''),
+                        'accountId': getattr(cash_item, 'accountId', '')
+                    }
+                    cash_list.append(cash_dict)
+            
+            if not cash_list:
+                logger.warning("未找到现金流数据")
+                return pd.DataFrame(columns=['reportDate', 'dateTime', 'amount', 'currency', 'type', 'activityDescription'])
+            
+            df = pd.DataFrame(cash_list)
+            
+            # 数据清理
+            df['reportDate'] = pd.to_datetime(df['reportDate'], errors='coerce')
+            df['dateTime'] = pd.to_datetime(df['dateTime'], errors='coerce')
+            df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+            
+            # 按时间过滤
+            if start_date:
+                df = df[df['reportDate'] >= pd.to_datetime(start_date)]
+            if end_date:
+                df = df[df['reportDate'] <= pd.to_datetime(end_date)]
+            
+            # 排序
+            df = df.sort_values('reportDate', ascending=True)
+            
+            logger.info(f"成功获取 {len(df)} 条现金流记录")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取现金流数据失败: {e}")
+            st.error(f"❌ 获取现金流数据失败: {e}")
+            return pd.DataFrame()
+    
+    @st.cache_data(ttl=3600)  # 缓存1小时  
+    def fetch_positions(_self, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        """
+        获取持仓数据
+        
+        Args:
+            start_date: 开始日期 (YYYY-MM-DD)
+            end_date: 结束日期 (YYYY-MM-DD)
+            
+        Returns:
+            DataFrame: 持仓数据
+        """
+        if not _self.validate_config():
+            st.error("❌ 请先配置 IBKR API 信息")
+            return pd.DataFrame()
+        
+        try:
+            logger.info(f"正在获取持仓数据: {start_date} 到 {end_date}")
+            
+            response = _self._download_with_retry(_self.flex_token, _self.query_id)
+            
+            try:
+                pos_data = parser.parse(response)
+            except Exception as parse_error:
+                logger.warning(f"持仓数据解析失败，尝试预处理: {parse_error}")
+                
+                xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
+                
+                problematic_attrs = ['subCategory', 'underlyingConid', 'underlyingSymbol']
+                for attr in problematic_attrs:
+                    pattern = f' {attr}="[^"]*"'
+                    xml_str = re.sub(pattern, '', xml_str)
+                
+                pos_data = parser.parse(xml_str.encode('utf-8'))
+            
+            if not hasattr(pos_data, 'FlexStatements') or not pos_data.FlexStatements:
+                logger.warning("未找到 FlexStatements")
+                return pd.DataFrame()
+            
+            stmt = pos_data.FlexStatements[0]
+            
+            pos_list = []
+            
+            # 检查 Positions 节点
+            if hasattr(stmt, 'Positions') and stmt.Positions:
+                for pos_item in stmt.Positions:
+                    pos_dict = {
+                        'reportDate': getattr(pos_item, 'reportDate', None),
+                        'symbol': getattr(pos_item, 'symbol', ''),
+                        'position': getattr(pos_item, 'position', 0),
+                        'markPrice': getattr(pos_item, 'markPrice', 0),
+                        'positionValue': getattr(pos_item, 'positionValue', 0),
+                        'currency': getattr(pos_item, 'currency', 'USD'),
+                        'accountId': getattr(pos_item, 'accountId', ''),
+                        'assetCategory': getattr(pos_item, 'assetCategory', '')
+                    }
+                    pos_list.append(pos_dict)
+            
+            if not pos_list:
+                logger.warning("未找到持仓数据")
+                return pd.DataFrame(columns=['reportDate', 'symbol', 'position', 'markPrice', 'positionValue', 'currency'])
+            
+            df = pd.DataFrame(pos_list)
+            
+            # 数据清理
+            df['reportDate'] = pd.to_datetime(df['reportDate'], errors='coerce')
+            df['position'] = pd.to_numeric(df['position'], errors='coerce')
+            df['markPrice'] = pd.to_numeric(df['markPrice'], errors='coerce')
+            df['positionValue'] = pd.to_numeric(df['positionValue'], errors='coerce')
+            
+            # 按时间过滤
+            if start_date:
+                df = df[df['reportDate'] >= pd.to_datetime(start_date)]
+            if end_date:
+                df = df[df['reportDate'] <= pd.to_datetime(end_date)]
+            
+            # 排序
+            df = df.sort_values(['reportDate', 'symbol'], ascending=True)
+            
+            logger.info(f"成功获取 {len(df)} 条持仓记录")
+            return df
+            
+        except Exception as e:
+            logger.error(f"获取持仓数据失败: {e}")
+            st.error(f"❌ 获取持仓数据失败: {e}")
+            return pd.DataFrame()
+
+def _download_with_global_retry(token: str, query_id: str, max_retries: int = 3, delay: float = 2.0):
+    """
+    全局重试下载函数
+    
+    Args:
+        token: Flex Token
+        query_id: Query ID  
+        max_retries: 最大重试次数
+        delay: 重试间隔(秒)
+        
+    Returns:
+        API响应数据
+    """
+    import time
+    
+    last_error = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            if attempt > 0:
+                logger.info(f"重试获取数据，第 {attempt}/{max_retries} 次")
+                time.sleep(delay * attempt)  # 递增延时
+            
+            # 使用 ibflex 库获取数据
+            response = client.download(token, query_id)
+            logger.info("数据获取成功")
+            return response
+            
+        except Exception as e:
+            last_error = e
+            error_str = str(e).lower()
+            
+            # 判断是否为网络相关错误，值得重试
+            is_retryable = any([
+                "ssl" in error_str,
+                "eof occurred" in error_str,
+                "connection" in error_str,
+                "timeout" in error_str,
+                "network" in error_str,
+                "max retries exceeded" in error_str
+            ])
+            
+            if not is_retryable or attempt >= max_retries:
+                # 不可重试的错误或达到最大重试次数
+                logger.error(f"获取数据失败 (尝试 {attempt + 1}/{max_retries + 1}): {str(e)}")
+                raise e
+            else:
+                logger.warning(f"网络错误，将重试 (尝试 {attempt + 1}/{max_retries + 1}): {str(e)}")
+                
+    # 如果所有重试都失败了
+    raise last_error if last_error else Exception("未知错误")
+
 def test_connection(token: str, query_id: str) -> tuple[bool, str]:
     """
     测试 API 连接
@@ -356,7 +750,7 @@ def test_connection(token: str, query_id: str) -> tuple[bool, str]:
             return False, "Token 或 Query ID 未配置"
             
         logger.info(f"测试连接: Token={token[:10]}... Query ID={query_id}")
-        response = client.download(token, query_id)
+        response = _download_with_global_retry(token, query_id)
         
         try:
             data = parser.parse(response)

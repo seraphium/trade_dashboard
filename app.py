@@ -14,6 +14,7 @@ from data_fetcher import IBKRDataFetcher, test_connection
 from comment_manager import CommentManager
 from chart_utils import ChartGenerator
 from benchmark_data import BenchmarkDataFetcher
+from twr_calculator import TWRCalculator
 
 # 配置页面
 st.set_page_config(
@@ -44,6 +45,14 @@ def init_session_state():
         st.session_state.benchmark_data = {}
     if 'portfolio_data' not in st.session_state:
         st.session_state.portfolio_data = pd.DataFrame()
+    if 'twr_calculator' not in st.session_state:
+        st.session_state.twr_calculator = TWRCalculator()
+    if 'nav_data' not in st.session_state:
+        st.session_state.nav_data = pd.DataFrame()
+    if 'cash_flow_data' not in st.session_state:
+        st.session_state.cash_flow_data = pd.DataFrame()
+    if 'twr_result' not in st.session_state:
+        st.session_state.twr_result = {}
 
 def main():
     """主函数"""
@@ -227,6 +236,50 @@ def main():
                         if not benchmark_data:
                             st.error("❌ 未能获取任何基准数据")
         
+        # TWR 分析数据获取
+        st.subheader("📊 TWR 分析数据")
+        
+        # 获取NAV和现金流数据按钮
+        if st.button("📈 获取 TWR 数据", use_container_width=True):
+            if st.session_state.data_fetcher.validate_config():
+                with st.spinner("正在获取 NAV 和现金流数据..."):
+                    # 获取NAV数据
+                    nav_data = st.session_state.data_fetcher.fetch_nav_data(
+                        start_date=start_date.strftime("%Y-%m-%d"),
+                        end_date=end_date.strftime("%Y-%m-%d")
+                    )
+                    
+                    # 获取现金流数据
+                    cash_flow_data = st.session_state.data_fetcher.fetch_cash_transactions(
+                        start_date=start_date.strftime("%Y-%m-%d"),
+                        end_date=end_date.strftime("%Y-%m-%d")
+                    )
+                    
+                    if not nav_data.empty or not cash_flow_data.empty:
+                        st.session_state.nav_data = nav_data
+                        st.session_state.cash_flow_data = cash_flow_data
+                        
+                        # 计算TWR
+                        if not nav_data.empty:
+                            twr_result = st.session_state.twr_calculator.calculate_twr(
+                                nav_data, cash_flow_data
+                            )
+                            st.session_state.twr_result = twr_result
+                            
+                            st.success(f"✅ 成功获取 {len(nav_data)} 条NAV记录")
+                            if not cash_flow_data.empty:
+                                st.success(f"✅ 成功获取 {len(cash_flow_data)} 条现金流记录")
+                                st.info(f"📊 TWR计算完成：{twr_result.get('total_twr', 0):.2%}")
+                        else:
+                            if not cash_flow_data.empty:
+                                st.session_state.cash_flow_data = cash_flow_data
+                                st.success(f"✅ 成功获取 {len(cash_flow_data)} 条现金流记录")
+                            st.warning("⚠️ 未获取到NAV数据，无法计算TWR")
+                    else:
+                        st.warning("⚠️ 未获取到TWR分析所需数据")
+            else:
+                st.error("请先配置 API 信息")
+        
         st.markdown("---")
         
         # 数据统计
@@ -280,7 +333,7 @@ def main():
         return
     
     # 创建标签页
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 交易记录", "📈 图表分析", "🆚 基准对比", "💬 评论管理", "📊 统计报告"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📋 交易记录", "📈 图表分析", "🆚 基准对比", "⏱️ TWR分析", "💬 评论管理", "📊 统计报告"])
     
     with tab1:
         show_trades_table()
@@ -292,9 +345,12 @@ def main():
         show_benchmark_comparison()
     
     with tab4:
-        show_comment_management()
+        show_twr_analysis()
     
     with tab5:
+        show_comment_management()
+    
+    with tab6:
         show_statistics()
 
 def show_trades_table():
@@ -731,6 +787,194 @@ def show_benchmark_comparison():
             - **^GSPC**: S&P 500 指数
             - **^IXIC**: 纳斯达克指数
             """)
+
+def show_twr_analysis():
+    """显示TWR分析页面"""
+    st.subheader("⏱️ 时间加权收益率(TWR)分析")
+    
+    # 检查是否有TWR数据
+    if not st.session_state.twr_result:
+        st.info("请先在侧边栏获取 TWR 数据")
+        
+        st.subheader("📖 TWR 分析说明")
+        with st.expander("什么是时间加权收益率(TWR)?", expanded=True):
+            st.markdown("""
+            **时间加权收益率(Time-Weighted Return, TWR)**是一种投资绩效评估方法：
+            
+            **核心特点:**
+            - 剔除现金流（入金/出金）的影响
+            - 真实反映投资策略本身的表现
+            - 适合评估投资管理能力
+            
+            **计算原理:**
+            - 将投资期间按现金流事件分割为多个子区间
+            - 计算每个子区间的收益率
+            - 将各子区间收益率几何连乘
+            
+            **与MWR的区别:**
+            - TWR：评估策略表现，排除入金时机影响
+            - MWR：评估整体决策，包含入金时机
+            
+            **数据需求:**
+            - 每日净资产价值(NAV)
+            - 现金流记录(入金/出金)
+            - 持仓快照(可选)
+            """)
+        
+        with st.expander("如何获取TWR数据"):
+            st.markdown("""
+            1. **配置Flex Query**: 确保您的Flex Query包含以下数据：
+               - Net Asset Value (NAV)
+               - Cash Transactions  
+               - Positions (可选)
+               
+            2. **点击获取**: 在侧边栏点击"📈 获取 TWR 数据"按钮
+            
+            3. **自动计算**: 系统将自动计算TWR及相关指标
+            """)
+        
+        return
+    
+    twr_result = st.session_state.twr_result
+    chart_gen = st.session_state.chart_generator
+    
+    # 核心指标展示
+    st.subheader("📊 核心绩效指标")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "总时间加权收益率",
+            f"{twr_result.get('total_twr', 0):.2%}",
+            help="整个投资期间的时间加权收益率"
+        )
+    
+    with col2:
+        st.metric(
+            "年化收益率", 
+            f"{twr_result.get('annualized_return', 0):.2%}",
+            help="基于投资天数计算的年化收益率"
+        )
+    
+    with col3:
+        st.metric(
+            "年化波动率",
+            f"{twr_result.get('volatility', 0):.2%}",
+            help="收益率的年化标准差"
+        )
+    
+    with col4:
+        st.metric(
+            "夏普比率",
+            f"{twr_result.get('sharpe_ratio', 0):.3f}",
+            help="风险调整后的收益率指标"
+        )
+    
+    # 最大回撤信息
+    if twr_result.get('max_drawdown', 0) > 0:
+        st.warning(f"📉 最大回撤: {twr_result['max_drawdown']:.2%}")
+        if twr_result.get('max_drawdown_start') and twr_result.get('max_drawdown_end'):
+            st.info(f"回撤期间: {twr_result['max_drawdown_start'].strftime('%Y-%m-%d')} 至 {twr_result['max_drawdown_end'].strftime('%Y-%m-%d')}")
+    
+    st.markdown("---")
+    
+    # TWR主图表
+    st.subheader("📈 TWR 时间序列分析")
+    fig_twr = chart_gen.create_twr_chart(twr_result)
+    st.plotly_chart(fig_twr, use_container_width=True)
+    
+    # 指标仪表板
+    st.subheader("🎛️ 绩效指标仪表板")
+    fig_dashboard = chart_gen.create_twr_metrics_dashboard(twr_result)
+    st.plotly_chart(fig_dashboard, use_container_width=True)
+    
+    # 现金流分析
+    if not twr_result.get('external_cash_flows').empty:
+        st.subheader("💰 现金流影响分析")
+        fig_cf = chart_gen.create_cash_flow_impact_chart(twr_result)
+        st.plotly_chart(fig_cf, use_container_width=True)
+        
+        # 现金流详情表
+        with st.expander("现金流详情", expanded=False):
+            cf_df = twr_result['external_cash_flows'].copy()
+            cf_df['date'] = cf_df['date'].dt.strftime('%Y-%m-%d')
+            cf_df = cf_df.rename(columns={
+                'date': '日期',
+                'amount': '金额',
+                'type': '类型',
+                'description': '描述'
+            })
+            st.dataframe(cf_df, use_container_width=True, hide_index=True)
+    
+    # 周期性收益率
+    st.subheader("📅 周期性收益率分析")
+    
+    frequency_options = {
+        'M': '月度',
+        'Q': '季度',
+        'Y': '年度'
+    }
+    
+    selected_freq = st.selectbox(
+        "选择分析频率",
+        options=list(frequency_options.keys()),
+        format_func=lambda x: frequency_options[x]
+    )
+    
+    if st.button(f"计算{frequency_options[selected_freq]}TWR", key="calc_periodic_twr"):
+        with st.spinner(f"正在计算{frequency_options[selected_freq]}TWR..."):
+            periodic_twr = st.session_state.twr_calculator.calculate_periodic_twr(
+                st.session_state.nav_data,
+                st.session_state.cash_flow_data,
+                frequency=selected_freq
+            )
+            
+            if not periodic_twr.empty:
+                # 周期性TWR图表
+                fig_periodic = chart_gen.create_periodic_twr_chart(periodic_twr, selected_freq)
+                st.plotly_chart(fig_periodic, use_container_width=True)
+                
+                # 周期性TWR表格
+                with st.expander(f"{frequency_options[selected_freq]}TWR详情"):
+                    display_df = periodic_twr.copy()
+                    display_df['period'] = display_df['period'].dt.strftime('%Y-%m' if selected_freq == 'M' else '%Y')
+                    display_df['return'] = display_df['return'].apply(lambda x: f"{x:.2%}")
+                    display_df['start_nav'] = display_df['start_nav'].round(2)
+                    display_df['end_nav'] = display_df['end_nav'].round(2)
+                    display_df['cash_flows'] = display_df['cash_flows'].round(2)
+                    
+                    display_df = display_df.rename(columns={
+                        'period': '时期',
+                        'start_nav': '期初NAV',
+                        'end_nav': '期末NAV',
+                        'cash_flows': '现金流',
+                        'return': '收益率'
+                    })
+                    
+                    st.dataframe(display_df, use_container_width=True, hide_index=True)
+            else:
+                st.warning(f"无法计算{frequency_options[selected_freq]}TWR，数据不足")
+    
+    # 详细计算信息
+    with st.expander("🔍 计算详情", expanded=False):
+        st.write("**计算参数:**")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write(f"- 分析期间: {twr_result['start_date']} 至 {twr_result['end_date']}")
+            st.write(f"- 总天数: {twr_result['total_days']} 天")
+            st.write(f"- 计算区间数: {twr_result['period_count']} 个")
+        
+        with col2:
+            st.write(f"- NAV数据点: {len(twr_result['nav_data'])} 个")
+            st.write(f"- 现金流事件: {len(twr_result['external_cash_flows'])} 个")
+            st.write(f"- 风险无风险利率: 2% (年化)")
+        
+        if twr_result.get('period_returns'):
+            st.write("**分期收益率:**")
+            for i, ret in enumerate(twr_result['period_returns']):
+                st.write(f"- 第{i+1}期: {ret:.4%}")
 
 if __name__ == "__main__":
     main() 

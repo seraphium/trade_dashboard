@@ -148,6 +148,10 @@ class BenchmarkDataFetcher:
                     logger.error(f"未找到时间字段，可用字段: {list(df.columns)}")
                     return pd.DataFrame()
                 
+                # 统一处理时区 - 移除时区信息以避免后续合并错误
+                if hasattr(df['Date'].dtype, 'tz') and df['Date'].dtype.tz is not None:
+                    df['Date'] = df['Date'].dt.tz_localize(None)
+                
                 # 重命名列以匹配原有格式
                 column_mapping = {
                     'open': 'Open',
@@ -272,6 +276,11 @@ class BenchmarkDataFetcher:
             }).reset_index()
             
             daily_portfolio['datetime'] = pd.to_datetime(daily_portfolio['datetime'])
+       
+            # 确保时间列没有时区信息
+            if hasattr(daily_portfolio['datetime'].dtype, 'tz') and daily_portfolio['datetime'].dtype.tz is not None:
+                daily_portfolio['datetime'] = daily_portfolio['datetime'].dt.tz_localize(None)
+            
             daily_portfolio['portfolio_value'] = initial_capital + daily_portfolio['cumulative_pnl']
             daily_portfolio['portfolio_return'] = (daily_portfolio['portfolio_value'] / initial_capital - 1) * 100
             
@@ -506,6 +515,10 @@ class BenchmarkDataFetcher:
                 'Close': prices,
                 'Volume': np.random.randint(1000000, 10000000, n_days)
             })
+            
+            # 确保日期列没有时区信息
+            if hasattr(df['Date'].dtype, 'tz') and df['Date'].dtype.tz is not None:
+                df['Date'] = df['Date'].dt.tz_localize(None)
             
             # 计算收益率
             df['Cumulative_Return'] = (df['Close'] / df['Close'].iloc[0] - 1) * 100
