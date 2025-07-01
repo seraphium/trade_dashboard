@@ -5,7 +5,12 @@
 ibkr:
   # 您需要在 IBKR 账户管理中创建 Flex Query 并获取以下信息
   flex_token: ""  # 您的 Flex Web Service Token (必填)
-  query_id: ""    # 您的 Query ID (必填)
+  
+  # 交易数据查询 ID（用于获取交易记录）
+  trades_query_id: ""    # Trades Query ID (必填)
+  
+  # 性能数据查询 ID（用于获取NAV、现金流等TWR计算数据）
+  performance_query_id: ""  # Performance Query ID (必填，用于TWR分析)
   
 # 应用配置
 app:
@@ -25,5 +30,9 @@ charts:
 
 # 配置说明:
 # 1. flex_token: 从 IBKR 账户管理 → Reports → Flex Queries → Generate Token 获取
-# 2. query_id: 创建 Flex Query 后获得的 ID
-# 3. 其他配置项可根据需要调整 
+# 2. trades_query_id: 创建用于获取交易数据的 Flex Query 后获得的 ID
+#    - 需要包含 Trades 数据节点
+# 3. performance_query_id: 创建用于获取性能数据的 Flex Query 后获得的 ID  
+#    - 需要包含 EquitySummaryByReportDateInBase, CashTransactions, OpenPositions 等节点
+#    - 用于 TWR (时间加权收益率) 分析
+# 4. 其他配置项可根据需要调整 

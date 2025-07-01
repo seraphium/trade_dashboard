@@ -97,12 +97,33 @@ class CashFlowProcessor:
         # 确定现金流类型
         if 'type' not in cf_df.columns:
             cf_df['type'] = cf_df.apply(CashFlowProcessor._infer_cash_flow_type, axis=1)
+        else:
+            # 标准化现金流类型
+            cf_df['type'] = cf_df['type'].apply(CashFlowProcessor._standardize_cash_flow_type)
         
         # 添加描述
         if 'description' not in cf_df.columns:
             cf_df['description'] = cf_df.get('activityDescription', '')
         
         return cf_df[['date', 'amount', 'type', 'description']].dropna(subset=['amount'])
+    
+    @staticmethod
+    def _standardize_cash_flow_type(type_str: str) -> str:
+        """标准化现金流类型"""
+        type_str = str(type_str).lower()
+        
+        if 'dividend' in type_str:
+            return 'DIVIDEND'
+        elif 'interest' in type_str:
+            return 'INTEREST'
+        elif 'deposit' in type_str or 'wire in' in type_str:
+            return 'DEPOSIT'
+        elif 'withdrawal' in type_str or 'wire out' in type_str:
+            return 'WITHDRAWAL'
+        elif 'fee' in type_str or 'commission' in type_str:
+            return 'FEE'
+        else:
+            return type_str.upper()
     
     @staticmethod
     def _infer_cash_flow_type(row) -> str:

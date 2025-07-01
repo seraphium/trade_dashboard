@@ -165,6 +165,57 @@ pip uninstall yfinance
 
 ## 版本历史
 
+### v2.1 - 双Query ID支持 (2024-01)
+
+#### 🔧 重要配置更新
+为了支持不同类型的数据获取，现在需要配置**两个不同的 IBKR Flex Query ID**：
+
+1. **Trades Query ID**: 用于获取交易数据
+2. **Performance Query ID**: 用于获取TWR分析所需的NAV、现金流等数据
+
+#### 配置文件更新
+
+##### config.yaml
+```yaml
+ibkr:
+  flex_token: "YOUR_FLEX_TOKEN"
+  
+  # 交易数据查询ID（用于获取交易记录）
+  trades_query_id: "YOUR_TRADES_QUERY_ID"
+  
+  # 性能数据查询ID（用于获取NAV、现金流等TWR计算数据）
+  performance_query_id: "YOUR_PERFORMANCE_QUERY_ID"
+```
+
+##### .env 
+```bash
+IBKR_FLEX_TOKEN=your_flex_token_here
+IBKR_TRADES_QUERY_ID=your_trades_query_id_here
+IBKR_PERFORMANCE_QUERY_ID=your_performance_query_id_here
+```
+
+#### 🔄 迁移指南
+
+##### 从单Query配置迁移：
+1. **保留现有配置**: 原有的 `query_id` 将自动用作 `trades_query_id`（向后兼容）
+2. **创建Performance Query**: 在IBKR中创建新的Flex Query，包含以下数据节点：
+   - `EquitySummaryByReportDateInBase`
+   - `CashTransactions`
+   - `OpenPositions`
+   - `MTMPerformanceSummaryInBase`
+3. **更新配置**: 添加新的 `performance_query_id` 配置
+
+##### 新功能：
+- ✅ **智能数据路由**: 交易数据和性能数据使用不同的Query ID
+- ✅ **分离式验证**: 独立验证不同类型的数据配置
+- ✅ **双连接测试**: 可分别测试交易数据和性能数据连接
+- ✅ **改进的错误处理**: 针对不同Query类型的特定错误提示
+
+#### 界面更新
+- 🔗 **双测试按钮**: "测试交易数据连接" 和 "测试性能数据连接"
+- 📊 **配置状态显示**: 显示两个Query ID的配置状态
+- ⚙️ **改进的配置指南**: 详细的双Query创建说明
+
 ### v2.0 - TWR时间加权收益率功能 (2024-01)
 
 #### 新增功能

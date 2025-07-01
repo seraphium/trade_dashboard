@@ -67,42 +67,79 @@ def main():
         st.header("⚙️ 配置")
         
         # API 配置检查
-        if not st.session_state.data_fetcher.validate_config():
-            st.error("❌ 请先配置 IBKR API")
-            st.info("请在 config.yaml 中设置您的 flex_token 和 query_id")
+        trades_config_ok = st.session_state.data_fetcher.validate_config('trades')
+        performance_config_ok = st.session_state.data_fetcher.validate_config('performance')
+        
+        if not trades_config_ok or not performance_config_ok:
+            if not trades_config_ok:
+                st.error("❌ 缺少交易数据配置")
+            if not performance_config_ok:
+                st.error("❌ 缺少性能数据配置")
+                
+            st.info("请在 config.yaml 中设置 flex_token、trades_query_id 和 performance_query_id")
             
             # 允许在界面中输入配置
             st.subheader("临时配置")
             flex_token = st.text_input("Flex Token", type="password", help="从 IBKR 账户管理中获取")
-            query_id = st.text_input("Query ID", help="您创建的 Flex Query ID")
             
-            if st.button("测试连接"):
-                if flex_token and query_id:
-                    with st.spinner("正在测试连接..."):
-                        success, message = test_connection(flex_token, query_id)
-                        if success:
-                            st.success(f"✅ {message}")
-                            # 临时更新配置
-                            st.session_state.data_fetcher.flex_token = flex_token
-                            st.session_state.data_fetcher.query_id = query_id
-                        else:
-                            st.error(f"❌ {message}")
-                            
-                            # 如果是1020错误，显示详细解决方案
-                            if "1020" in message:
-                                st.markdown("""
-                                **🔧 错误 1020 解决步骤：**
-                                1. 登录 [IBKR 账户管理](https://www.interactivebrokers.com)
-                                2. 导航到 Reports → Flex Queries
-                                3. 检查您的 Flex Query 状态是否为 "Active"
-                                4. 确认 Query 包含 "Trades" 数据部分
-                                5. 重新生成 Flex Token
-                                6. 确保复制的 Token 和 Query ID 没有多余的空格
-                                """)
-                else:
-                    st.warning("请输入完整的配置信息")
+            col1, col2 = st.columns(2)
+            with col1:
+                trades_query_id = st.text_input("Trades Query ID", help="用于获取交易数据的 Query ID")
+            with col2:
+                performance_query_id = st.text_input("Performance Query ID", help="用于获取TWR数据的 Query ID")
+            
+            # 测试不同的连接
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("🔗 测试交易数据连接", key="test_trades_connection"):
+                    if flex_token and trades_query_id:
+                        with st.spinner("正在测试交易数据连接..."):
+                            success, message = test_connection(flex_token, trades_query_id)
+                            if success:
+                                st.success(f"✅ {message}")
+                                # 临时更新配置
+                                st.session_state.data_fetcher.flex_token = flex_token
+                                st.session_state.data_fetcher.trades_query_id = trades_query_id
+                            else:
+                                st.error(f"❌ {message}")
+                    else:
+                        st.warning("请输入 Token 和 Trades Query ID")
+            
+            with col2:
+                if st.button("📈 测试性能数据连接", key="test_performance_connection"):
+                    if flex_token and performance_query_id:
+                        with st.spinner("正在测试性能数据连接..."):
+                            success, message = test_connection(flex_token, performance_query_id)
+                            if success:
+                                st.success(f"✅ {message}")
+                                # 临时更新配置
+                                st.session_state.data_fetcher.flex_token = flex_token
+                                st.session_state.data_fetcher.performance_query_id = performance_query_id
+                            else:
+                                st.error(f"❌ {message}")
+                    else:
+                        st.warning("请输入 Token 和 Performance Query ID")
+            
+            # 错误解决方案提示
+            st.markdown("""
+            **🔧 配置指南：**
+            1. 登录 [IBKR 账户管理](https://www.interactivebrokers.com)
+            2. 导航到 Reports → Flex Queries
+            3. 创建两个不同的 Flex Query：
+               - **Trades Query**: 包含 "Trades" 数据节点
+               - **Performance Query**: 包含 "EquitySummaryByReportDateInBase", "CashTransactions", "OpenPositions" 等节点
+            4. 确保两个 Query 状态都为 "Active"
+            5. 生成 Flex Token（一个 Token 可用于多个 Query）
+            """)
         else:
             st.success("✅ API 配置已就绪")
+            
+            # 显示配置状态
+            if trades_config_ok:
+                st.success(f"🔄 交易数据: Query ID {st.session_state.data_fetcher.trades_query_id}")
+            if performance_config_ok:
+                st.success(f"📈 性能数据: Query ID {st.session_state.data_fetcher.performance_query_id}")
         
         st.markdown("---")
         
@@ -150,8 +187,8 @@ def main():
         )
         
         # 获取数据按钮
-        if st.button("🔄 获取交易数据", use_container_width=True):
-            if st.session_state.data_fetcher.validate_config():
+        if st.button("🔄 获取交易数据", key="fetch_trades_data", use_container_width=True):
+            if st.session_state.data_fetcher.validate_config('trades'):
                 with st.spinner("正在获取交易数据..."):
                     trades_df = st.session_state.data_fetcher.fetch_trades(
                         start_date=start_date.strftime("%Y-%m-%d"),
@@ -172,10 +209,61 @@ def main():
                     else:
                         st.warning("未获取到交易数据")
             else:
-                st.error("请先配置 API 信息")
+                st.error("请先配置交易数据 API 信息")
+
+        # TWR数据获取按钮
+        if st.button("📈 获取 TWR 数据", key="sidebar_twr_button", use_container_width=True):
+            if st.session_state.data_fetcher.validate_config('performance'):
+                with st.spinner("正在获取TWR所需数据..."):
+                    # 获取NAV数据
+                    nav_data = st.session_state.data_fetcher.fetch_nav_data(
+                        start_date=start_date.strftime("%Y-%m-%d"),
+                        end_date=end_date.strftime("%Y-%m-%d")
+                    )
+                    
+                    # 获取现金流数据
+                    cash_data = st.session_state.data_fetcher.fetch_cash_transactions(
+                        start_date=start_date.strftime("%Y-%m-%d"),
+                        end_date=end_date.strftime("%Y-%m-%d")
+                    )
+                    
+                    if not nav_data.empty:
+                        st.session_state.nav_data = nav_data
+                        st.success(f"✅ 获取 {len(nav_data)} 条NAV记录")
+                    else:
+                        st.warning("⚠️ 未获取到NAV数据")
+                    
+                    if not cash_data.empty:
+                        st.session_state.cash_flow_data = cash_data
+                        st.success(f"✅ 获取 {len(cash_data)} 条现金流记录")
+                    else:
+                        st.info("ℹ️ 未获取到现金流数据（可能期间无现金流动）")
+                    
+                    # 如果有数据，尝试计算TWR
+                    if not nav_data.empty:
+                        try:
+                            with st.spinner("正在计算TWR..."):
+                                twr_result = st.session_state.twr_calculator.calculate_total_twr(
+                                    nav_data, cash_data
+                                )
+                                st.session_state.twr_result = twr_result
+                                
+                                if twr_result:
+                                    total_twr = twr_result.get('total_twr', 0)
+                                    annualized_return = twr_result.get('annualized_return', 0)
+                                    days = twr_result.get('days', 0)
+                                    
+                                    st.success(f"🎯 TWR计算完成：总TWR = {total_twr:.4f}% ({days}天), 年化收益率 = {annualized_return:.2f}%")
+                                else:
+                                    st.error("❌ TWR计算失败")
+                        except Exception as e:
+                            st.error(f"❌ TWR计算出错: {e}")
+                            logger.error(f"TWR计算错误: {e}")
+            else:
+                st.error("请先配置性能数据 API 信息")
         
         # Financial Datasets API 连接测试
-        if st.button("🔗 测试 Financial Datasets API 连接", use_container_width=True):
+        if st.button("🔗 测试 Financial Datasets API 连接", key="test_financial_api", use_container_width=True):
             with st.spinner("正在测试连接..."):
                 if st.session_state.benchmark_fetcher.test_api_connection():
                     st.success("✅ Financial Datasets API 连接正常")
@@ -189,7 +277,7 @@ def main():
         )
         
         # 获取基准数据按钮
-        if selected_benchmarks and st.button("📈 获取基准数据", use_container_width=True):
+        if selected_benchmarks and st.button("📈 获取基准数据", key="fetch_benchmark_data", use_container_width=True):
             with st.spinner("正在获取基准指数数据..."):
                 if use_mock_data:
                     # 使用模拟数据
@@ -236,49 +324,7 @@ def main():
                         if not benchmark_data:
                             st.error("❌ 未能获取任何基准数据")
         
-        # TWR 分析数据获取
-        st.subheader("📊 TWR 分析数据")
-        
-        # 获取NAV和现金流数据按钮
-        if st.button("📈 获取 TWR 数据", use_container_width=True):
-            if st.session_state.data_fetcher.validate_config():
-                with st.spinner("正在获取 NAV 和现金流数据..."):
-                    # 获取NAV数据
-                    nav_data = st.session_state.data_fetcher.fetch_nav_data(
-                        start_date=start_date.strftime("%Y-%m-%d"),
-                        end_date=end_date.strftime("%Y-%m-%d")
-                    )
-                    
-                    # 获取现金流数据
-                    cash_flow_data = st.session_state.data_fetcher.fetch_cash_transactions(
-                        start_date=start_date.strftime("%Y-%m-%d"),
-                        end_date=end_date.strftime("%Y-%m-%d")
-                    )
-                    
-                    if not nav_data.empty or not cash_flow_data.empty:
-                        st.session_state.nav_data = nav_data
-                        st.session_state.cash_flow_data = cash_flow_data
-                        
-                        # 计算TWR
-                        if not nav_data.empty:
-                            twr_result = st.session_state.twr_calculator.calculate_twr(
-                                nav_data, cash_flow_data
-                            )
-                            st.session_state.twr_result = twr_result
-                            
-                            st.success(f"✅ 成功获取 {len(nav_data)} 条NAV记录")
-                            if not cash_flow_data.empty:
-                                st.success(f"✅ 成功获取 {len(cash_flow_data)} 条现金流记录")
-                                st.info(f"📊 TWR计算完成：{twr_result.get('total_twr', 0):.2%}")
-                        else:
-                            if not cash_flow_data.empty:
-                                st.session_state.cash_flow_data = cash_flow_data
-                                st.success(f"✅ 成功获取 {len(cash_flow_data)} 条现金流记录")
-                            st.warning("⚠️ 未获取到NAV数据，无法计算TWR")
-                    else:
-                        st.warning("⚠️ 未获取到TWR分析所需数据")
-            else:
-                st.error("请先配置 API 信息")
+
         
         st.markdown("---")
         
@@ -443,7 +489,7 @@ def show_trades_table():
         # 保存评论按钮
         col1, col2 = st.columns([1, 4])
         with col1:
-            if st.button("💾 保存更改", use_container_width=True):
+            if st.button("💾 保存更改", key="save_trade_changes", use_container_width=True):
                 # 比较原始数据和编辑后的数据
                 original_comments = dict(zip(df['trade_id'], df['comment']))
                 edited_comments = dict(zip(df['trade_id'], edited_df['comment']))
@@ -577,7 +623,7 @@ def show_comment_management():
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("导出评论为 CSV"):
+        if st.button("导出评论为 CSV", key="export_comments_csv"):
             csv_data = comment_mgr.export_comments_csv()
             if csv_data:
                 st.download_button(
@@ -590,7 +636,7 @@ def show_comment_management():
                 st.warning("没有评论数据可导出")
     
     with col2:
-        if st.button("备份评论数据"):
+        if st.button("备份评论数据", key="backup_comments"):
             if comment_mgr.save_comments():
                 st.success("✅ 评论数据已备份")
             else:

@@ -36,16 +36,38 @@ class IBKRDataFetcher:
             os.getenv('IBKR_FLEX_TOKEN') or  # 环境变量
             self.config.get('ibkr', {}).get('flex_token', '')  # config.yaml
         )
-        self.query_id = (
-            os.getenv('IBKR_QUERY_ID') or  # 环境变量
-            self.config.get('ibkr', {}).get('query_id', '')  # config.yaml
+        
+        # 支持两个不同的Query ID
+        self.trades_query_id = (
+            os.getenv('IBKR_TRADES_QUERY_ID') or  # 环境变量
+            self.config.get('ibkr', {}).get('trades_query_id', '') or  # config.yaml新格式
+            self.config.get('ibkr', {}).get('query_id', '')  # config.yaml旧格式（向后兼容）
+        )
+        
+        self.performance_query_id = (
+            os.getenv('IBKR_PERFORMANCE_QUERY_ID') or  # 环境变量
+            self.config.get('ibkr', {}).get('performance_query_id', '')  # config.yaml新格式
         )
     
-    def validate_config(self) -> bool:
-        """验证配置是否完整"""
-        if not self.flex_token or not self.query_id:
+    def validate_config(self, query_type: str = 'trades') -> bool:
+        """
+        验证配置是否完整
+        
+        Args:
+            query_type: 查询类型，'trades' 或 'performance' 或 'all'
+        """
+        if not self.flex_token:
             return False
-        return True
+            
+        if query_type == 'trades':
+            return bool(self.trades_query_id)
+        elif query_type == 'performance':
+            return bool(self.performance_query_id)
+        elif query_type == 'all':
+            return bool(self.trades_query_id and self.performance_query_id)
+        else:
+            # 默认检查trades query
+            return bool(self.trades_query_id)
     
     def _download_with_retry(self, token: str, query_id: str, max_retries: int = 3, delay: float = 2.0):
         """
@@ -114,16 +136,16 @@ class IBKRDataFetcher:
         Returns:
             DataFrame: 交易数据
         """
-        if not _self.validate_config():
-            st.error("❌ 请先在 config.yaml 中配置您的 IBKR Flex Token 和 Query ID")
+        if not _self.validate_config('trades'):
+            st.error("❌ 请先在 config.yaml 中配置您的 IBKR Flex Token 和 Trades Query ID")
             return pd.DataFrame()
         
         try:
             logger.info(f"正在获取交易数据: {start_date} 到 {end_date}")
-            logger.info(f"使用 Token: {_self.flex_token[:10]}... 和 Query ID: {_self.query_id}")
+            logger.info(f"使用 Token: {_self.flex_token[:10]}... 和 Trades Query ID: {_self.trades_query_id}")
             
             # 使用重试机制获取数据
-            response = _self._download_with_retry(_self.flex_token, _self.query_id)
+            response = _self._download_with_retry(_self.flex_token, _self.trades_query_id)
             
             # 尝试解析数据，如果失败则进行预处理
             try:
@@ -349,8 +371,27 @@ class IBKRDataFetcher:
                             # 预处理 XML 数据
                             xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
                             
-                            # 移除可能导致问题的属性（简化版）
-                            problematic_attrs = ['subCategory', 'underlyingConid', 'underlyingSymbol']
+                            # 使用完整的属性清理列表
+                            problematic_attrs = [
+                                'subCategory', 'underlyingConid', 'underlyingSymbol', 
+                                'underlyingSecurityID', 'underlyingListingExchange',
+                                'issuer', 'issuerCountryCode', 'securityIDType',
+                                'cusip', 'isin', 'figi', 'principalAdjustFactor',
+                                'relatedTradeID', 'strike', 'expiry', 'putCall',
+                                'dateTime', 'settleDateTarget', 'tradeMoney',
+                                'netCash', 'closePrice', 'openCloseIndicator',
+                                'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
+                                'origTradePrice', 'origTradeDate', 'origTradeID',
+                                'origOrderID', 'origTransactionID', 'clearingFirmID',
+                                'ibExecID', 'relatedTransactionID', 'rtn',
+                                'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
+                                'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
+                                'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
+                                'levelOfDetail', 'changeInPrice', 'changeInQuantity',
+                                'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
+                                'tradeID', 'tradeDate', 'tradeTime', 'tradePrice',
+                                'quantity', 'proceeds', 'commission', 'buySell'
+                            ]
                             for attr in problematic_attrs:
                                 pattern = f' {attr}="[^"]*"'
                                 xml_str = re.sub(pattern, '', xml_str)
@@ -387,7 +428,13 @@ class IBKRDataFetcher:
     def get_account_summary(self) -> Dict[str, Any]:
         """获取账户概要信息"""
         try:
-            response = self._download_with_retry(self.flex_token, self.query_id)
+            # 优先使用performance query，如果没有则使用trades query
+            query_id = self.performance_query_id or self.trades_query_id
+            if not query_id:
+                logger.error("未配置任何Query ID")
+                return {}
+            
+            response = self._download_with_retry(self.flex_token, query_id)
             
             try:
                 data = parser.parse(response)
@@ -397,8 +444,27 @@ class IBKRDataFetcher:
                 # 预处理 XML 数据
                 xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
                 
-                # 移除可能导致问题的属性
-                problematic_attrs = ['subCategory', 'underlyingConid', 'underlyingSymbol']
+                # 使用完整的属性清理列表
+                problematic_attrs = [
+                    'subCategory', 'underlyingConid', 'underlyingSymbol', 
+                    'underlyingSecurityID', 'underlyingListingExchange',
+                    'issuer', 'issuerCountryCode', 'securityIDType',
+                    'cusip', 'isin', 'figi', 'principalAdjustFactor',
+                    'relatedTradeID', 'strike', 'expiry', 'putCall',
+                    'dateTime', 'settleDateTarget', 'tradeMoney',
+                    'netCash', 'closePrice', 'openCloseIndicator',
+                    'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
+                    'origTradePrice', 'origTradeDate', 'origTradeID',
+                    'origOrderID', 'origTransactionID', 'clearingFirmID',
+                    'ibExecID', 'relatedTransactionID', 'rtn',
+                    'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
+                    'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
+                    'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
+                    'levelOfDetail', 'changeInPrice', 'changeInQuantity',
+                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
+                    'tradeID', 'tradeDate', 'tradeTime', 'tradePrice',
+                    'quantity', 'proceeds', 'commission', 'buySell'
+                ]
                 for attr in problematic_attrs:
                     pattern = f' {attr}="[^"]*"'
                     xml_str = re.sub(pattern, '', xml_str)
@@ -433,15 +499,16 @@ class IBKRDataFetcher:
         Returns:
             DataFrame: NAV数据，包含日期和净资产价值
         """
-        if not _self.validate_config():
-            st.error("❌ 请先配置 IBKR API 信息")
+        if not _self.validate_config('performance'):
+            st.error("❌ 请先配置 IBKR Performance Query ID")
             return pd.DataFrame()
         
         try:
             logger.info(f"正在获取NAV数据: {start_date} 到 {end_date}")
+            logger.info(f"使用 Performance Query ID: {_self.performance_query_id}")
             
             # 使用重试机制获取数据
-            response = _self._download_with_retry(_self.flex_token, _self.query_id)
+            response = _self._download_with_retry(_self.flex_token, _self.performance_query_id)
             
             # 解析数据
             try:
@@ -452,8 +519,28 @@ class IBKRDataFetcher:
                 # 预处理 XML 数据
                 xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
                 
-                # 移除可能导致问题的属性
-                problematic_attrs = ['subCategory', 'underlyingConid', 'underlyingSymbol']
+                # 移除可能导致问题的属性 - 针对不同数据类型
+                problematic_attrs = [
+                    'subCategory', 'underlyingConid', 'underlyingSymbol', 
+                    'underlyingSecurityID', 'underlyingListingExchange',
+                    'issuer', 'issuerCountryCode', 'securityIDType',
+                    'cusip', 'isin', 'figi', 'principalAdjustFactor',
+                    'relatedTradeID', 'strike', 'expiry', 'putCall',
+                    'dateTime', 'settleDateTarget', 'tradeMoney',
+                    'netCash', 'closePrice', 'openCloseIndicator',
+                    'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
+                    'origTradePrice', 'origTradeDate', 'origTradeID',
+                    'origOrderID', 'origTransactionID', 'clearingFirmID',
+                    'ibExecID', 'relatedTransactionID', 'rtn',
+                    'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
+                    'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
+                    'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
+                    'levelOfDetail', 'changeInPrice', 'changeInQuantity',
+                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
+                    'tradeID', 'tradeDate', 'tradeTime', 'tradePrice',
+                    'quantity', 'proceeds', 'commission', 'buySell'
+                ]
+                
                 for attr in problematic_attrs:
                     pattern = f' {attr}="[^"]*"'
                     xml_str = re.sub(pattern, '', xml_str)
@@ -480,15 +567,67 @@ class IBKRDataFetcher:
                     }
                     nav_list.append(nav_dict)
             
+            # 检查 EquitySummaryInBase 节点（用户数据格式）
+            elif hasattr(stmt, 'EquitySummaryInBase') and stmt.EquitySummaryInBase:
+                logger.info("从 EquitySummaryInBase 节点获取NAV数据")
+                for equity_item in stmt.EquitySummaryInBase:
+                    # 计算总NAV = stock + options
+                    stock_value = float(getattr(equity_item, 'stock', 0))
+                    options_value = float(getattr(equity_item, 'options', 0))
+                    total_nav = stock_value + options_value
+                    
+                    nav_dict = {
+                        'reportDate': getattr(equity_item, 'reportDate', None),
+                        'total': total_nav,
+                        'currency': getattr(equity_item, 'currency', 'USD'),
+                        'stock': stock_value,
+                        'options': options_value
+                    }
+                    nav_list.append(nav_dict)
+            
+            # 检查 EquitySummaryByReportDateInBase 节点（performance query格式）
+            elif hasattr(stmt, 'EquitySummaryByReportDateInBase') and stmt.EquitySummaryByReportDateInBase:
+                logger.info("从 EquitySummaryByReportDateInBase 节点获取NAV数据")
+                for equity_item in stmt.EquitySummaryByReportDateInBase:
+                    # 计算总NAV = stock + options
+                    stock_value = float(getattr(equity_item, 'stock', 0))
+                    options_value = float(getattr(equity_item, 'options', 0))
+                    total_nav = stock_value + options_value
+                    
+                    nav_dict = {
+                        'reportDate': getattr(equity_item, 'reportDate', None),
+                        'total': total_nav,
+                        'currency': getattr(equity_item, 'currency', 'USD'),
+                        'stock': stock_value,
+                        'options': options_value
+                    }
+                    nav_list.append(nav_dict)
+            
+            # 检查 MTMPerformanceSummaryInBase 节点（性能总结数据）
+            elif hasattr(stmt, 'MTMPerformanceSummaryInBase') and stmt.MTMPerformanceSummaryInBase:
+                logger.info("从 MTMPerformanceSummaryInBase 节点获取NAV数据")
+                for mtm_item in stmt.MTMPerformanceSummaryInBase:
+                    # 从MTM数据推导NAV
+                    ending_value = float(getattr(mtm_item, 'endingValue', 0))
+                    
+                    nav_dict = {
+                        'reportDate': getattr(mtm_item, 'reportDate', None),
+                        'total': ending_value,
+                        'currency': getattr(mtm_item, 'currency', 'USD'),
+                        'stock': ending_value,  # 简化处理
+                        'options': 0
+                    }
+                    nav_list.append(nav_dict)
+            
             # 如果没有专门的NAV数据，尝试从其他节点推导
             elif hasattr(stmt, 'Trades') or hasattr(stmt, 'CashTransactions'):
                 # 可以从持仓和现金数据计算NAV，这里先返回空数据
                 logger.warning("未找到专门的NAV数据，需要通过其他方式计算")
-                return pd.DataFrame(columns=['reportDate', 'total', 'currency'])
+                return pd.DataFrame(columns=['reportDate', 'total', 'currency', 'stock', 'options'])
             
             if not nav_list:
                 logger.warning("未找到NAV数据")
-                return pd.DataFrame(columns=['reportDate', 'total', 'currency'])
+                return pd.DataFrame(columns=['reportDate', 'total', 'currency', 'stock', 'options'])
             
             df = pd.DataFrame(nav_list)
             
@@ -525,14 +664,15 @@ class IBKRDataFetcher:
         Returns:
             DataFrame: 现金流数据
         """
-        if not _self.validate_config():
-            st.error("❌ 请先配置 IBKR API 信息")
+        if not _self.validate_config('performance'):
+            st.error("❌ 请先配置 IBKR Performance Query ID")
             return pd.DataFrame()
         
         try:
             logger.info(f"正在获取现金流数据: {start_date} 到 {end_date}")
+            logger.info(f"使用 Performance Query ID: {_self.performance_query_id}")
             
-            response = _self._download_with_retry(_self.flex_token, _self.query_id)
+            response = _self._download_with_retry(_self.flex_token, _self.performance_query_id)
             
             try:
                 cash_data = parser.parse(response)
@@ -541,7 +681,27 @@ class IBKRDataFetcher:
                 
                 xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
                 
-                problematic_attrs = ['subCategory', 'underlyingConid', 'underlyingSymbol']
+                # 使用与NAV相同的完整属性清理列表
+                problematic_attrs = [
+                    'subCategory', 'underlyingConid', 'underlyingSymbol', 
+                    'underlyingSecurityID', 'underlyingListingExchange',
+                    'issuer', 'issuerCountryCode', 'securityIDType',
+                    'cusip', 'isin', 'figi', 'principalAdjustFactor',
+                    'relatedTradeID', 'strike', 'expiry', 'putCall',
+                    'dateTime', 'settleDateTarget', 'tradeMoney',
+                    'netCash', 'closePrice', 'openCloseIndicator',
+                    'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
+                    'origTradePrice', 'origTradeDate', 'origTradeID',
+                    'origOrderID', 'origTransactionID', 'clearingFirmID',
+                    'ibExecID', 'relatedTransactionID', 'rtn',
+                    'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
+                    'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
+                    'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
+                    'levelOfDetail', 'changeInPrice', 'changeInQuantity',
+                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
+                    'tradeID', 'tradeDate', 'tradeTime', 'tradePrice',
+                    'quantity', 'proceeds', 'commission', 'buySell'
+                ]
                 for attr in problematic_attrs:
                     pattern = f' {attr}="[^"]*"'
                     xml_str = re.sub(pattern, '', xml_str)
@@ -558,22 +718,33 @@ class IBKRDataFetcher:
             
             # 检查 CashTransactions 节点
             if hasattr(stmt, 'CashTransactions') and stmt.CashTransactions:
+                logger.info(f"找到 {len(stmt.CashTransactions)} 条现金流记录")
                 for cash_item in stmt.CashTransactions:
+                    report_date = getattr(cash_item, 'reportDate', None)
+                    amount = getattr(cash_item, 'amount', 0)
+                    cash_type = getattr(cash_item, 'type', '')
+                    
+                    # 如果没有dateTime，使用reportDate
+                    date_time = getattr(cash_item, 'dateTime', None)
+                    if not date_time and report_date:
+                        date_time = report_date
+                    
                     cash_dict = {
-                        'reportDate': getattr(cash_item, 'reportDate', None),
-                        'dateTime': getattr(cash_item, 'dateTime', None),
-                        'amount': getattr(cash_item, 'amount', 0),
-                        'currency': getattr(cash_item, 'currency', 'USD'),
-                        'type': getattr(cash_item, 'type', ''),
-                        'activityDescription': getattr(cash_item, 'activityDescription', ''),
+                        'reportDate': report_date,
+                        'dateTime': date_time,
+                        'amount': float(amount) if amount else 0,
+                        'currency': getattr(cash_item, 'currency', 'USD'),  # 默认USD
+                        'type': cash_type,
+                        'activityDescription': getattr(cash_item, 'activityDescription', cash_type),  # 默认使用type
                         'symbol': getattr(cash_item, 'symbol', ''),
-                        'accountId': getattr(cash_item, 'accountId', '')
+                        'accountId': getattr(cash_item, 'accountId', ''),
+                        'tradeID': getattr(cash_item, 'tradeID', '')
                     }
                     cash_list.append(cash_dict)
             
             if not cash_list:
                 logger.warning("未找到现金流数据")
-                return pd.DataFrame(columns=['reportDate', 'dateTime', 'amount', 'currency', 'type', 'activityDescription'])
+                return pd.DataFrame(columns=['reportDate', 'dateTime', 'amount', 'currency', 'type', 'activityDescription', 'symbol', 'accountId', 'tradeID'])
             
             df = pd.DataFrame(cash_list)
             
@@ -611,14 +782,15 @@ class IBKRDataFetcher:
         Returns:
             DataFrame: 持仓数据
         """
-        if not _self.validate_config():
-            st.error("❌ 请先配置 IBKR API 信息")
+        if not _self.validate_config('performance'):
+            st.error("❌ 请先配置 IBKR Performance Query ID")
             return pd.DataFrame()
         
         try:
             logger.info(f"正在获取持仓数据: {start_date} 到 {end_date}")
+            logger.info(f"使用 Performance Query ID: {_self.performance_query_id}")
             
-            response = _self._download_with_retry(_self.flex_token, _self.query_id)
+            response = _self._download_with_retry(_self.flex_token, _self.performance_query_id)
             
             try:
                 pos_data = parser.parse(response)
@@ -627,7 +799,27 @@ class IBKRDataFetcher:
                 
                 xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
                 
-                problematic_attrs = ['subCategory', 'underlyingConid', 'underlyingSymbol']
+                # 使用与NAV相同的完整属性清理列表
+                problematic_attrs = [
+                    'subCategory', 'underlyingConid', 'underlyingSymbol', 
+                    'underlyingSecurityID', 'underlyingListingExchange',
+                    'issuer', 'issuerCountryCode', 'securityIDType',
+                    'cusip', 'isin', 'figi', 'principalAdjustFactor',
+                    'relatedTradeID', 'strike', 'expiry', 'putCall',
+                    'dateTime', 'settleDateTarget', 'tradeMoney',
+                    'netCash', 'closePrice', 'openCloseIndicator',
+                    'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
+                    'origTradePrice', 'origTradeDate', 'origTradeID',
+                    'origOrderID', 'origTransactionID', 'clearingFirmID',
+                    'ibExecID', 'relatedTransactionID', 'rtn',
+                    'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
+                    'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
+                    'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
+                    'levelOfDetail', 'changeInPrice', 'changeInQuantity',
+                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
+                    'tradeID', 'tradeDate', 'tradeTime', 'tradePrice',
+                    'quantity', 'proceeds', 'commission', 'buySell'
+                ]
                 for attr in problematic_attrs:
                     pattern = f' {attr}="[^"]*"'
                     xml_str = re.sub(pattern, '', xml_str)
@@ -760,22 +952,63 @@ def test_connection(token: str, query_id: str) -> tuple[bool, str]:
             # 预处理 XML 数据
             xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
             
-            # 移除可能导致问题的属性
-            problematic_attrs = ['subCategory', 'underlyingConid', 'underlyingSymbol']
+            # 使用完整的属性清理列表
+            problematic_attrs = [
+                'subCategory', 'underlyingConid', 'underlyingSymbol', 
+                'underlyingSecurityID', 'underlyingListingExchange',
+                'issuer', 'issuerCountryCode', 'securityIDType',
+                'cusip', 'isin', 'figi', 'principalAdjustFactor',
+                'relatedTradeID', 'strike', 'expiry', 'putCall',
+                'dateTime', 'settleDateTarget', 'tradeMoney',
+                'netCash', 'closePrice', 'openCloseIndicator',
+                'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
+                'origTradePrice', 'origTradeDate', 'origTradeID',
+                'origOrderID', 'origTransactionID', 'clearingFirmID',
+                'ibExecID', 'relatedTransactionID', 'rtn',
+                'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
+                'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
+                'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
+                'levelOfDetail', 'changeInPrice', 'changeInQuantity',
+                'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
+                'tradeID', 'tradeDate', 'tradeTime', 'tradePrice',
+                'quantity', 'proceeds', 'commission', 'buySell'
+            ]
             for attr in problematic_attrs:
                 pattern = f' {attr}="[^"]*"'
                 xml_str = re.sub(pattern, '', xml_str)
             
             data = parser.parse(xml_str.encode('utf-8'))
         
-        # 检查是否包含交易数据
+        # 检查响应数据内容
         if hasattr(data, 'FlexStatements') and data.FlexStatements:
             stmt = data.FlexStatements[0]
-            if hasattr(stmt, 'Trades'):
-                trade_count = len(stmt.Trades) if stmt.Trades else 0
-                return True, f"连接成功，找到 {trade_count} 条交易记录"
+            data_found = []
+            
+            # 检查各种数据类型
+            if hasattr(stmt, 'Trades') and stmt.Trades:
+                trade_count = len(stmt.Trades)
+                data_found.append(f"{trade_count} 条交易记录")
+            
+            if hasattr(stmt, 'EquitySummaryInBase') and stmt.EquitySummaryInBase:
+                nav_count = len(stmt.EquitySummaryInBase)
+                data_found.append(f"{nav_count} 条NAV记录")
+            
+            if hasattr(stmt, 'CashTransactions') and stmt.CashTransactions:
+                cash_count = len(stmt.CashTransactions)
+                data_found.append(f"{cash_count} 条现金流记录")
+            
+            if hasattr(stmt, 'OpenPositions') and stmt.OpenPositions:
+                pos_count = len(stmt.OpenPositions)
+                data_found.append(f"{pos_count} 条持仓记录")
+            
+            if hasattr(stmt, 'MTMPerformanceSummaryInBase') and stmt.MTMPerformanceSummaryInBase:
+                mtm_count = len(stmt.MTMPerformanceSummaryInBase)
+                data_found.append(f"{mtm_count} 条MTM记录")
+            
+            if data_found:
+                return True, f"连接成功，找到: {', '.join(data_found)}"
             else:
-                return True, "连接成功，但未找到交易数据部分（请检查 Flex Query 配置）"
+                return True, "连接成功，但未找到预期的数据部分（请检查 Flex Query 配置）"
         else:
             return True, "连接成功，但响应中没有找到 FlexStatements"
             
