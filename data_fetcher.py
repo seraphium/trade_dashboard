@@ -16,6 +16,73 @@ from dotenv import load_dotenv
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def safe_get_attr(obj, attr_name, default=None):
+    """安全获取对象属性，支持多种访问方式"""
+    try:
+        # 方式1: 直接getattr
+        return getattr(obj, attr_name, default)
+    except:
+        try:
+            # 方式2: 如果对象有__dict__
+            if hasattr(obj, '__dict__'):
+                return obj.__dict__.get(attr_name, default)
+        except:
+            try:
+                # 方式3: 如果对象是字典形式
+                if hasattr(obj, '__getitem__'):
+                    return obj[attr_name] if attr_name in obj else default
+            except:
+                pass
+    return default
+
+
+def safe_float(value, default=0.0):
+    """安全转换为浮点数，处理None和无效值"""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
+# IBKR XML 中可能导致解析问题的属性列表
+# 这些属性在某些情况下会导致 ibflex 解析器失败，需要在预处理时移除
+PROBLEMATIC_ATTRS = [
+    # 基础标识符属性
+    'subCategory', 'underlyingConid', 'underlyingSymbol', 
+    'underlyingSecurityID', 'underlyingListingExchange',
+    'issuer', 'issuerCountryCode', 'securityIDType',
+    'cusip', 'isin', 'figi', 'principalAdjustFactor',
+    
+    # 交易相关属性
+    'relatedTradeID', 'strike', 'expiry', 'putCall',
+    'settleDateTarget', 'tradeMoney',
+    'netCash', 'closePrice', 'openCloseIndicator',
+    'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
+    
+    # 订单和交易ID属性
+    'origTradePrice', 'origTradeDate', 'origTradeID',
+    'origOrderID', 'origTransactionID', 'clearingFirmID',
+    'ibExecID', 'relatedTransactionID', 'rtn',
+    'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
+    'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
+    
+    # 时间和状态属性
+    'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
+    'levelOfDetail', 'changeInPrice', 'changeInQuantity',
+    'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
+    
+    # 交易数据属性（在某些查询类型中可能有问题）
+    'tradeID', 'tradePrice',
+    'proceeds', 'commission', 'buySell',
+    
+    # 商品和投资属性
+    'initialInvestment', 'serialNumber', 'deliveryType',
+    'commodityType', 'fineness', 'weight'
+]
+
 class IBKRDataFetcher:
     """IBKR Flex API 数据获取器"""
     
@@ -158,28 +225,7 @@ class IBKRDataFetcher:
                 xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
                 
                 # 移除可能导致问题的属性
-                problematic_attrs = [
-                    'subCategory', 'underlyingConid', 'underlyingSymbol', 
-                    'underlyingSecurityID', 'underlyingListingExchange',
-                    'issuer', 'issuerCountryCode', 'securityIDType',
-                    'cusip', 'isin', 'figi', 'principalAdjustFactor',
-                    'relatedTradeID', 'strike', 'expiry', 'putCall',
-                    'dateTime', 'settleDateTarget', 'tradeMoney',
-                    'netCash', 'closePrice', 'openCloseIndicator',
-                    'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
-                    'origTradePrice', 'origTradeDate', 'origTradeID',
-                    'origOrderID', 'origTransactionID', 'clearingFirmID',
-                    'ibExecID', 'relatedTransactionID', 'rtn',
-                    'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
-                    'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
-                    'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
-                    'levelOfDetail', 'changeInPrice', 'changeInQuantity',
-                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
-                    'initialInvestment', 'serialNumber', 'deliveryType',
-                    'commodityType', 'fineness', 'weight'
-                ]
-                
-                for attr in problematic_attrs:
+                for attr in PROBLEMATIC_ATTRS:
                     # 移除属性，但保留核心交易数据
                     pattern = f' {attr}="[^"]*"'
                     xml_str = re.sub(pattern, '', xml_str)
@@ -232,10 +278,10 @@ class IBKRDataFetcher:
                     datetime_str = pd.to_datetime(str(trade_date))
                 
                 # 处理数值类型（可能是 Decimal）
-                quantity_float = abs(float(quantity)) if quantity else 0
-                price_float = float(trade_price) if trade_price else 0
-                proceeds_float = float(getattr(trade, 'proceeds', 0))
-                commission_float = float(getattr(trade, 'ibCommission', 0))
+                quantity_float = abs(safe_float(quantity))
+                price_float = safe_float(trade_price)
+                proceeds_float = safe_float(getattr(trade, 'proceeds', 0))
+                commission_float = safe_float(getattr(trade, 'ibCommission', 0))
                 
                 trade_dict = {
                     'trade_id': trade_id,
@@ -372,27 +418,7 @@ class IBKRDataFetcher:
                             xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
                             
                             # 使用完整的属性清理列表
-                            problematic_attrs = [
-                                'subCategory', 'underlyingConid', 'underlyingSymbol', 
-                                'underlyingSecurityID', 'underlyingListingExchange',
-                                'issuer', 'issuerCountryCode', 'securityIDType',
-                                'cusip', 'isin', 'figi', 'principalAdjustFactor',
-                                'relatedTradeID', 'strike', 'expiry', 'putCall',
-                                'dateTime', 'settleDateTarget', 'tradeMoney',
-                                'netCash', 'closePrice', 'openCloseIndicator',
-                                'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
-                                'origTradePrice', 'origTradeDate', 'origTradeID',
-                                'origOrderID', 'origTransactionID', 'clearingFirmID',
-                                'ibExecID', 'relatedTransactionID', 'rtn',
-                                'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
-                                'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
-                                'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
-                                'levelOfDetail', 'changeInPrice', 'changeInQuantity',
-                                'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
-                                'tradeID', 'tradeDate', 'tradeTime', 'tradePrice',
-                                'quantity', 'proceeds', 'commission', 'buySell'
-                            ]
-                            for attr in problematic_attrs:
+                            for attr in PROBLEMATIC_ATTRS:
                                 pattern = f' {attr}="[^"]*"'
                                 xml_str = re.sub(pattern, '', xml_str)
                             
@@ -445,27 +471,7 @@ class IBKRDataFetcher:
                 xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
                 
                 # 使用完整的属性清理列表
-                problematic_attrs = [
-                    'subCategory', 'underlyingConid', 'underlyingSymbol', 
-                    'underlyingSecurityID', 'underlyingListingExchange',
-                    'issuer', 'issuerCountryCode', 'securityIDType',
-                    'cusip', 'isin', 'figi', 'principalAdjustFactor',
-                    'relatedTradeID', 'strike', 'expiry', 'putCall',
-                    'dateTime', 'settleDateTarget', 'tradeMoney',
-                    'netCash', 'closePrice', 'openCloseIndicator',
-                    'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
-                    'origTradePrice', 'origTradeDate', 'origTradeID',
-                    'origOrderID', 'origTransactionID', 'clearingFirmID',
-                    'ibExecID', 'relatedTransactionID', 'rtn',
-                    'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
-                    'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
-                    'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
-                    'levelOfDetail', 'changeInPrice', 'changeInQuantity',
-                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
-                    'tradeID', 'tradeDate', 'tradeTime', 'tradePrice',
-                    'quantity', 'proceeds', 'commission', 'buySell'
-                ]
-                for attr in problematic_attrs:
+                for attr in PROBLEMATIC_ATTRS:
                     pattern = f' {attr}="[^"]*"'
                     xml_str = re.sub(pattern, '', xml_str)
                 
@@ -520,27 +526,9 @@ class IBKRDataFetcher:
                 xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
                 
                 # 移除可能导致问题的属性 - 但保留重要的性能数据属性
-                problematic_attrs = [
-                    'subCategory', 'underlyingConid', 'underlyingSymbol', 
-                    'underlyingSecurityID', 'underlyingListingExchange',
-                    'issuer', 'issuerCountryCode', 'securityIDType',
-                    'cusip', 'isin', 'figi', 'principalAdjustFactor',
-                    'relatedTradeID', 'strike', 'expiry', 'putCall',
-                    'settleDateTarget', 'tradeMoney',
-                    'netCash', 'closePrice', 'openCloseIndicator',
-                    'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
-                    'origTradePrice', 'origTradeDate', 'origTradeID',
-                    'origOrderID', 'origTransactionID', 'clearingFirmID',
-                    'ibExecID', 'relatedTransactionID', 'rtn',
-                    'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
-                    'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
-                    'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
-                    'levelOfDetail', 'changeInPrice', 'changeInQuantity',
-                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt'
-                    # 注意：我们不移除 currency, reportDate, stock, options, dateTime等重要属性
-                ]
-                
-                for attr in problematic_attrs:
+                # 注意：PROBLEMATIC_ATTRS 包含了 dateTime，但我们可能需要保留它用于某些性能数据
+                # 不移除: currency, reportDate, stock, options 等重要属性
+                for attr in PROBLEMATIC_ATTRS:
                     pattern = f' {attr}="[^"]*"'
                     xml_str = re.sub(pattern, '', xml_str)
                 
@@ -562,26 +550,6 @@ class IBKRDataFetcher:
             # 查找NAV数据（可能在不同节点中）
             nav_list = []
             
-            # 定义安全属性获取函数
-            def safe_get_attr(obj, attr_name, default=None):
-                """安全获取对象属性，支持多种访问方式"""
-                try:
-                    # 方式1: 直接getattr
-                    return getattr(obj, attr_name, default)
-                except:
-                    try:
-                        # 方式2: 如果对象有__dict__
-                        if hasattr(obj, '__dict__'):
-                            return obj.__dict__.get(attr_name, default)
-                    except:
-                        try:
-                            # 方式3: 如果对象是字典形式
-                            if hasattr(obj, '__getitem__'):
-                                return obj[attr_name] if attr_name in obj else default
-                        except:
-                            pass
-                return default
-            
             # 检查 NetAssetValue 节点
             if hasattr(stmt, 'NetAssetValue') and stmt.NetAssetValue:
                 for nav_item in stmt.NetAssetValue:
@@ -598,8 +566,8 @@ class IBKRDataFetcher:
                 for equity_item in stmt.EquitySummaryInBase:
                     try:
                         # 安全获取各属性
-                        stock_value = float(safe_get_attr(equity_item, 'stock', 0))
-                        options_value = float(safe_get_attr(equity_item, 'options', 0))
+                        stock_value = safe_float(safe_get_attr(equity_item, 'stock', 0))
+                        options_value = safe_float(safe_get_attr(equity_item, 'options', 0))
                         total_nav = stock_value + options_value
                         
                         nav_dict = {
@@ -626,8 +594,8 @@ class IBKRDataFetcher:
                 for equity_item in stmt.EquitySummaryByReportDateInBase:
                     try:
                         # 安全获取各属性
-                        stock_value = float(safe_get_attr(equity_item, 'stock', 0))
-                        options_value = float(safe_get_attr(equity_item, 'options', 0))
+                        stock_value = safe_float(safe_get_attr(equity_item, 'stock', 0))
+                        options_value = safe_float(safe_get_attr(equity_item, 'options', 0))
                         total_nav = stock_value + options_value
                         
                         nav_dict = {
@@ -654,7 +622,7 @@ class IBKRDataFetcher:
                 for mtm_item in stmt.MTMPerformanceSummaryInBase:
                     try:
                         # 从MTM数据推导NAV
-                        ending_value = float(safe_get_attr(mtm_item, 'endingValue', 0))
+                        ending_value = safe_float(safe_get_attr(mtm_item, 'endingValue', 0))
                         
                         nav_dict = {
                             'reportDate': safe_get_attr(mtm_item, 'reportDate', None),
@@ -737,28 +705,10 @@ class IBKRDataFetcher:
                 xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
                 
                 # 移除可能导致问题的属性 - 但保留现金流相关的重要属性
-                problematic_attrs = [
-                    'subCategory', 'underlyingConid', 'underlyingSymbol', 
-                    'underlyingSecurityID', 'underlyingListingExchange',
-                    'issuer', 'issuerCountryCode', 'securityIDType',
-                    'cusip', 'isin', 'figi', 'principalAdjustFactor',
-                    'relatedTradeID', 'strike', 'expiry', 'putCall',
-                    'settleDateTarget', 'tradeMoney',
-                    'netCash', 'closePrice', 'openCloseIndicator',
-                    'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
-                    'origTradePrice', 'origTradeDate', 'origTradeID',
-                    'origOrderID', 'origTransactionID', 'clearingFirmID',
-                    'ibExecID', 'relatedTransactionID', 'rtn',
-                    'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
-                    'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
-                    'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
-                    'levelOfDetail', 'changeInPrice', 'changeInQuantity',
-                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt'
-                    # 保留: currency, reportDate, amount, type, dateTime, activityDescription等重要属性
-                ]
+                # 保留: currency, reportDate, amount, type, dateTime, activityDescription等重要属性
                 # 移除XML中的换行符
                 xml_str = xml_str.replace('\n', '').replace('\r', '')
-                for attr in problematic_attrs:
+                for attr in PROBLEMATIC_ATTRS:
                     pattern = f' {attr}="[^"]*"'
                     xml_str = re.sub(pattern, '', xml_str)
                 
@@ -777,26 +727,6 @@ class IBKRDataFetcher:
             
             cash_list = []
             
-            # 定义安全属性获取函数
-            def safe_get_attr(obj, attr_name, default=None):
-                """安全获取对象属性，支持多种访问方式"""
-                try:
-                    # 方式1: 直接getattr
-                    return getattr(obj, attr_name, default)
-                except:
-                    try:
-                        # 方式2: 如果对象有__dict__
-                        if hasattr(obj, '__dict__'):
-                            return obj.__dict__.get(attr_name, default)
-                    except:
-                        try:
-                            # 方式3: 如果对象是字典形式
-                            if hasattr(obj, '__getitem__'):
-                                return obj[attr_name] if attr_name in obj else default
-                        except:
-                            pass
-                return default
-            
             # 检查 CashTransactions 节点
             if hasattr(stmt, 'CashTransactions') and stmt.CashTransactions:
                 logger.info(f"找到 {len(stmt.CashTransactions)} 条现金流记录")
@@ -814,7 +744,7 @@ class IBKRDataFetcher:
                         cash_dict = {
                             'reportDate': report_date,
                             'dateTime': date_time,
-                            'amount': float(amount) if amount else 0,
+                            'amount': safe_float(amount),
                             'currency': safe_get_attr(cash_item, 'currency', 'USD'),
                             'type': cash_type,
                             'activityDescription': safe_get_attr(cash_item, 'activityDescription', cash_type),
@@ -891,27 +821,7 @@ class IBKRDataFetcher:
                 xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
                 
                 # 使用与NAV相同的完整属性清理列表
-                problematic_attrs = [
-                    'subCategory', 'underlyingConid', 'underlyingSymbol', 
-                    'underlyingSecurityID', 'underlyingListingExchange',
-                    'issuer', 'issuerCountryCode', 'securityIDType',
-                    'cusip', 'isin', 'figi', 'principalAdjustFactor',
-                    'relatedTradeID', 'strike', 'expiry', 'putCall',
-                    'dateTime', 'settleDateTarget', 'tradeMoney',
-                    'netCash', 'closePrice', 'openCloseIndicator',
-                    'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
-                    'origTradePrice', 'origTradeDate', 'origTradeID',
-                    'origOrderID', 'origTransactionID', 'clearingFirmID',
-                    'ibExecID', 'relatedTransactionID', 'rtn',
-                    'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
-                    'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
-                    'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
-                    'levelOfDetail', 'changeInPrice', 'changeInQuantity',
-                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
-                    'tradeID', 'tradeDate', 'tradeTime', 'tradePrice',
-                    'quantity', 'proceeds', 'commission', 'buySell'
-                ]
-                for attr in problematic_attrs:
+                for attr in PROBLEMATIC_ATTRS:
                     pattern = f' {attr}="[^"]*"'
                     xml_str = re.sub(pattern, '', xml_str)
                 
@@ -929,14 +839,14 @@ class IBKRDataFetcher:
             if hasattr(stmt, 'Positions') and stmt.Positions:
                 for pos_item in stmt.Positions:
                     pos_dict = {
-                        'reportDate': getattr(pos_item, 'reportDate', None),
-                        'symbol': getattr(pos_item, 'symbol', ''),
-                        'position': getattr(pos_item, 'position', 0),
-                        'markPrice': getattr(pos_item, 'markPrice', 0),
-                        'positionValue': getattr(pos_item, 'positionValue', 0),
-                        'currency': getattr(pos_item, 'currency', 'USD'),
-                        'accountId': getattr(pos_item, 'accountId', ''),
-                        'assetCategory': getattr(pos_item, 'assetCategory', '')
+                        'reportDate': safe_get_attr(pos_item, 'reportDate', None),
+                        'symbol': safe_get_attr(pos_item, 'symbol', ''),
+                        'position': safe_get_attr(pos_item, 'position', 0),
+                        'markPrice': safe_get_attr(pos_item, 'markPrice', 0),
+                        'positionValue': safe_get_attr(pos_item, 'positionValue', 0),
+                        'currency': safe_get_attr(pos_item, 'currency', 'USD'),
+                        'accountId': safe_get_attr(pos_item, 'accountId', ''),
+                        'assetCategory': safe_get_attr(pos_item, 'assetCategory', '')
                     }
                     pos_list.append(pos_dict)
             
@@ -1042,29 +952,8 @@ def test_connection(token: str, query_id: str) -> tuple[bool, str]:
             
             # 预处理 XML 数据
             xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
-            
-            # 使用完整的属性清理列表
-            problematic_attrs = [
-                'subCategory', 'underlyingConid', 'underlyingSymbol', 
-                'underlyingSecurityID', 'underlyingListingExchange',
-                'issuer', 'issuerCountryCode', 'securityIDType',
-                'cusip', 'isin', 'figi', 'principalAdjustFactor',
-                'relatedTradeID', 'strike', 'expiry', 'putCall',
-                'dateTime', 'settleDateTarget', 'tradeMoney',
-                'netCash', 'closePrice', 'openCloseIndicator',
-                'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
-                'origTradePrice', 'origTradeDate', 'origTradeID',
-                'origOrderID', 'origTransactionID', 'clearingFirmID',
-                'ibExecID', 'relatedTransactionID', 'rtn',
-                'brokerageOrderID', 'orderReference', 'volatilityOrderLink',
-                'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
-                'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
-                'levelOfDetail', 'changeInPrice', 'changeInQuantity',
-                'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
-                'tradeID', 'tradeDate', 'tradeTime', 'tradePrice',
-                'quantity', 'proceeds', 'commission', 'buySell'
-            ]
-            for attr in problematic_attrs:
+                      
+            for attr in PROBLEMATIC_ATTRS:
                 pattern = f' {attr}="[^"]*"'
                 xml_str = re.sub(pattern, '', xml_str)
             
