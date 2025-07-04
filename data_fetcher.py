@@ -519,14 +519,14 @@ class IBKRDataFetcher:
                 # 预处理 XML 数据
                 xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
                 
-                # 移除可能导致问题的属性 - 针对不同数据类型
+                # 移除可能导致问题的属性 - 但保留重要的性能数据属性
                 problematic_attrs = [
                     'subCategory', 'underlyingConid', 'underlyingSymbol', 
                     'underlyingSecurityID', 'underlyingListingExchange',
                     'issuer', 'issuerCountryCode', 'securityIDType',
                     'cusip', 'isin', 'figi', 'principalAdjustFactor',
                     'relatedTradeID', 'strike', 'expiry', 'putCall',
-                    'dateTime', 'settleDateTarget', 'tradeMoney',
+                    'settleDateTarget', 'tradeMoney',
                     'netCash', 'closePrice', 'openCloseIndicator',
                     'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
                     'origTradePrice', 'origTradeDate', 'origTradeID',
@@ -536,16 +536,21 @@ class IBKRDataFetcher:
                     'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
                     'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
                     'levelOfDetail', 'changeInPrice', 'changeInQuantity',
-                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
-                    'tradeID', 'tradeDate', 'tradeTime', 'tradePrice',
-                    'quantity', 'proceeds', 'commission', 'buySell'
+                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt'
+                    # 注意：我们不移除 currency, reportDate, stock, options, dateTime等重要属性
                 ]
                 
                 for attr in problematic_attrs:
                     pattern = f' {attr}="[^"]*"'
                     xml_str = re.sub(pattern, '', xml_str)
                 
-                nav_data = parser.parse(xml_str.encode('utf-8'))
+                try:
+                    nav_data = parser.parse(xml_str.encode('utf-8'))
+                    logger.info("XML预处理后解析成功")
+                except Exception as final_error:
+                    logger.error(f"预处理后仍然解析失败: {final_error}")
+                    # 如果还是失败，直接返回空数据
+                    return pd.DataFrame()
             
             # 检查数据结构
             if not hasattr(nav_data, 'FlexStatements') or not nav_data.FlexStatements:
@@ -557,13 +562,33 @@ class IBKRDataFetcher:
             # 查找NAV数据（可能在不同节点中）
             nav_list = []
             
+            # 定义安全属性获取函数
+            def safe_get_attr(obj, attr_name, default=None):
+                """安全获取对象属性，支持多种访问方式"""
+                try:
+                    # 方式1: 直接getattr
+                    return getattr(obj, attr_name, default)
+                except:
+                    try:
+                        # 方式2: 如果对象有__dict__
+                        if hasattr(obj, '__dict__'):
+                            return obj.__dict__.get(attr_name, default)
+                    except:
+                        try:
+                            # 方式3: 如果对象是字典形式
+                            if hasattr(obj, '__getitem__'):
+                                return obj[attr_name] if attr_name in obj else default
+                        except:
+                            pass
+                return default
+            
             # 检查 NetAssetValue 节点
             if hasattr(stmt, 'NetAssetValue') and stmt.NetAssetValue:
                 for nav_item in stmt.NetAssetValue:
                     nav_dict = {
-                        'reportDate': getattr(nav_item, 'reportDate', None),
-                        'total': getattr(nav_item, 'total', 0),
-                        'currency': getattr(nav_item, 'currency', 'USD')
+                        'reportDate': safe_get_attr(nav_item, 'reportDate', None),
+                        'total': safe_get_attr(nav_item, 'total', 0),
+                        'currency': safe_get_attr(nav_item, 'currency', 'USD')
                     }
                     nav_list.append(nav_dict)
             
@@ -571,53 +596,83 @@ class IBKRDataFetcher:
             elif hasattr(stmt, 'EquitySummaryInBase') and stmt.EquitySummaryInBase:
                 logger.info("从 EquitySummaryInBase 节点获取NAV数据")
                 for equity_item in stmt.EquitySummaryInBase:
-                    # 计算总NAV = stock + options
-                    stock_value = float(getattr(equity_item, 'stock', 0))
-                    options_value = float(getattr(equity_item, 'options', 0))
-                    total_nav = stock_value + options_value
-                    
-                    nav_dict = {
-                        'reportDate': getattr(equity_item, 'reportDate', None),
-                        'total': total_nav,
-                        'currency': getattr(equity_item, 'currency', 'USD'),
-                        'stock': stock_value,
-                        'options': options_value
-                    }
-                    nav_list.append(nav_dict)
+                    try:
+                        # 安全获取各属性
+                        stock_value = float(safe_get_attr(equity_item, 'stock', 0))
+                        options_value = float(safe_get_attr(equity_item, 'options', 0))
+                        total_nav = stock_value + options_value
+                        
+                        nav_dict = {
+                            'reportDate': safe_get_attr(equity_item, 'reportDate', None),
+                            'total': total_nav,
+                            'currency': safe_get_attr(equity_item, 'currency', 'USD'),
+                            'stock': stock_value,
+                            'options': options_value
+                        }
+                        
+                        logger.debug(f"处理NAV记录: {nav_dict}")
+                        nav_list.append(nav_dict)
+                        
+                    except Exception as item_error:
+                        logger.warning(f"处理单个NAV记录失败: {item_error}")
+                        # 记录可用的属性以便调试
+                        available_attrs = [attr for attr in dir(equity_item) if not attr.startswith('_')]
+                        logger.debug(f"对象可用属性: {available_attrs}")
+                        continue
             
             # 检查 EquitySummaryByReportDateInBase 节点（performance query格式）
             elif hasattr(stmt, 'EquitySummaryByReportDateInBase') and stmt.EquitySummaryByReportDateInBase:
                 logger.info("从 EquitySummaryByReportDateInBase 节点获取NAV数据")
                 for equity_item in stmt.EquitySummaryByReportDateInBase:
-                    # 计算总NAV = stock + options
-                    stock_value = float(getattr(equity_item, 'stock', 0))
-                    options_value = float(getattr(equity_item, 'options', 0))
-                    total_nav = stock_value + options_value
-                    
-                    nav_dict = {
-                        'reportDate': getattr(equity_item, 'reportDate', None),
-                        'total': total_nav,
-                        'currency': getattr(equity_item, 'currency', 'USD'),
-                        'stock': stock_value,
-                        'options': options_value
-                    }
-                    nav_list.append(nav_dict)
+                    try:
+                        # 安全获取各属性
+                        stock_value = float(safe_get_attr(equity_item, 'stock', 0))
+                        options_value = float(safe_get_attr(equity_item, 'options', 0))
+                        total_nav = stock_value + options_value
+                        
+                        nav_dict = {
+                            'reportDate': safe_get_attr(equity_item, 'reportDate', None),
+                            'total': total_nav,
+                            'currency': safe_get_attr(equity_item, 'currency', 'USD'),
+                            'stock': stock_value,
+                            'options': options_value
+                        }
+                        
+                        logger.debug(f"处理NAV记录: {nav_dict}")
+                        nav_list.append(nav_dict)
+                        
+                    except Exception as item_error:
+                        logger.warning(f"处理单个NAV记录失败: {item_error}")
+                        # 记录可用的属性以便调试
+                        available_attrs = [attr for attr in dir(equity_item) if not attr.startswith('_')]
+                        logger.debug(f"对象可用属性: {available_attrs}")
+                        continue
             
             # 检查 MTMPerformanceSummaryInBase 节点（性能总结数据）
             elif hasattr(stmt, 'MTMPerformanceSummaryInBase') and stmt.MTMPerformanceSummaryInBase:
                 logger.info("从 MTMPerformanceSummaryInBase 节点获取NAV数据")
                 for mtm_item in stmt.MTMPerformanceSummaryInBase:
-                    # 从MTM数据推导NAV
-                    ending_value = float(getattr(mtm_item, 'endingValue', 0))
-                    
-                    nav_dict = {
-                        'reportDate': getattr(mtm_item, 'reportDate', None),
-                        'total': ending_value,
-                        'currency': getattr(mtm_item, 'currency', 'USD'),
-                        'stock': ending_value,  # 简化处理
-                        'options': 0
-                    }
-                    nav_list.append(nav_dict)
+                    try:
+                        # 从MTM数据推导NAV
+                        ending_value = float(safe_get_attr(mtm_item, 'endingValue', 0))
+                        
+                        nav_dict = {
+                            'reportDate': safe_get_attr(mtm_item, 'reportDate', None),
+                            'total': ending_value,
+                            'currency': safe_get_attr(mtm_item, 'currency', 'USD'),
+                            'stock': ending_value,  # 简化处理
+                            'options': 0
+                        }
+                        
+                        logger.debug(f"处理MTM NAV记录: {nav_dict}")
+                        nav_list.append(nav_dict)
+                        
+                    except Exception as item_error:
+                        logger.warning(f"处理单个MTM记录失败: {item_error}")
+                        # 记录可用的属性以便调试
+                        available_attrs = [attr for attr in dir(mtm_item) if not attr.startswith('_')]
+                        logger.debug(f"MTM对象可用属性: {available_attrs}")
+                        continue
             
             # 如果没有专门的NAV数据，尝试从其他节点推导
             elif hasattr(stmt, 'Trades') or hasattr(stmt, 'CashTransactions'):
@@ -681,14 +736,14 @@ class IBKRDataFetcher:
                 
                 xml_str = response.decode('utf-8') if isinstance(response, bytes) else str(response)
                 
-                # 使用与NAV相同的完整属性清理列表
+                # 移除可能导致问题的属性 - 但保留现金流相关的重要属性
                 problematic_attrs = [
                     'subCategory', 'underlyingConid', 'underlyingSymbol', 
                     'underlyingSecurityID', 'underlyingListingExchange',
                     'issuer', 'issuerCountryCode', 'securityIDType',
                     'cusip', 'isin', 'figi', 'principalAdjustFactor',
                     'relatedTradeID', 'strike', 'expiry', 'putCall',
-                    'dateTime', 'settleDateTarget', 'tradeMoney',
+                    'settleDateTarget', 'tradeMoney',
                     'netCash', 'closePrice', 'openCloseIndicator',
                     'notes', 'cost', 'fifoPnlRealized', 'mtmPnl',
                     'origTradePrice', 'origTradeDate', 'origTradeID',
@@ -698,15 +753,21 @@ class IBKRDataFetcher:
                     'exchOrderId', 'extExecID', 'orderTime', 'openDateTime',
                     'holdingPeriodDateTime', 'whenRealized', 'whenReopened',
                     'levelOfDetail', 'changeInPrice', 'changeInQuantity',
-                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
-                    'tradeID', 'tradeDate', 'tradeTime', 'tradePrice',
-                    'quantity', 'proceeds', 'commission', 'buySell'
+                    'orderType', 'traderID', 'isAPIOrder', 'accruedInt'
+                    # 保留: currency, reportDate, amount, type, dateTime, activityDescription等重要属性
                 ]
+                # 移除XML中的换行符
+                xml_str = xml_str.replace('\n', '').replace('\r', '')
                 for attr in problematic_attrs:
                     pattern = f' {attr}="[^"]*"'
                     xml_str = re.sub(pattern, '', xml_str)
                 
-                cash_data = parser.parse(xml_str.encode('utf-8'))
+                try:
+                    cash_data = parser.parse(xml_str.encode('utf-8'))
+                    logger.info("现金流XML预处理后解析成功")
+                except Exception as final_error:
+                    logger.error(f"现金流预处理后仍然解析失败: {final_error}")
+                    return pd.DataFrame()
             
             if not hasattr(cash_data, 'FlexStatements') or not cash_data.FlexStatements:
                 logger.warning("未找到 FlexStatements")
@@ -716,31 +777,61 @@ class IBKRDataFetcher:
             
             cash_list = []
             
+            # 定义安全属性获取函数
+            def safe_get_attr(obj, attr_name, default=None):
+                """安全获取对象属性，支持多种访问方式"""
+                try:
+                    # 方式1: 直接getattr
+                    return getattr(obj, attr_name, default)
+                except:
+                    try:
+                        # 方式2: 如果对象有__dict__
+                        if hasattr(obj, '__dict__'):
+                            return obj.__dict__.get(attr_name, default)
+                    except:
+                        try:
+                            # 方式3: 如果对象是字典形式
+                            if hasattr(obj, '__getitem__'):
+                                return obj[attr_name] if attr_name in obj else default
+                        except:
+                            pass
+                return default
+            
             # 检查 CashTransactions 节点
             if hasattr(stmt, 'CashTransactions') and stmt.CashTransactions:
                 logger.info(f"找到 {len(stmt.CashTransactions)} 条现金流记录")
                 for cash_item in stmt.CashTransactions:
-                    report_date = getattr(cash_item, 'reportDate', None)
-                    amount = getattr(cash_item, 'amount', 0)
-                    cash_type = getattr(cash_item, 'type', '')
-                    
-                    # 如果没有dateTime，使用reportDate
-                    date_time = getattr(cash_item, 'dateTime', None)
-                    if not date_time and report_date:
-                        date_time = report_date
-                    
-                    cash_dict = {
-                        'reportDate': report_date,
-                        'dateTime': date_time,
-                        'amount': float(amount) if amount else 0,
-                        'currency': getattr(cash_item, 'currency', 'USD'),  # 默认USD
-                        'type': cash_type,
-                        'activityDescription': getattr(cash_item, 'activityDescription', cash_type),  # 默认使用type
-                        'symbol': getattr(cash_item, 'symbol', ''),
-                        'accountId': getattr(cash_item, 'accountId', ''),
-                        'tradeID': getattr(cash_item, 'tradeID', '')
-                    }
-                    cash_list.append(cash_dict)
+                    try:
+                        report_date = safe_get_attr(cash_item, 'reportDate', None)
+                        amount = safe_get_attr(cash_item, 'amount', 0)
+                        cash_type = safe_get_attr(cash_item, 'type', '')
+                        
+                        # 如果没有dateTime，使用reportDate
+                        date_time = safe_get_attr(cash_item, 'dateTime', None)
+                        if not date_time and report_date:
+                            date_time = report_date
+                        
+                        cash_dict = {
+                            'reportDate': report_date,
+                            'dateTime': date_time,
+                            'amount': float(amount) if amount else 0,
+                            'currency': safe_get_attr(cash_item, 'currency', 'USD'),
+                            'type': cash_type,
+                            'activityDescription': safe_get_attr(cash_item, 'activityDescription', cash_type),
+                            'symbol': safe_get_attr(cash_item, 'symbol', ''),
+                            'accountId': safe_get_attr(cash_item, 'accountId', ''),
+                            'tradeID': safe_get_attr(cash_item, 'tradeID', '')
+                        }
+                        
+                        logger.debug(f"处理现金流记录: {cash_dict}")
+                        cash_list.append(cash_dict)
+                        
+                    except Exception as item_error:
+                        logger.warning(f"处理单个现金流记录失败: {item_error}")
+                        # 记录可用的属性以便调试
+                        available_attrs = [attr for attr in dir(cash_item) if not attr.startswith('_')]
+                        logger.debug(f"现金流对象可用属性: {available_attrs}")
+                        continue
             
             if not cash_list:
                 logger.warning("未找到现金流数据")

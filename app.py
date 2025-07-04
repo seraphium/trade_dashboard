@@ -243,7 +243,7 @@ def main():
                     if not nav_data.empty:
                         try:
                             with st.spinner("正在计算TWR..."):
-                                twr_result = st.session_state.twr_calculator.calculate_total_twr(
+                                twr_result = st.session_state.twr_calculator.calculate_twr(
                                     nav_data, cash_data
                                 )
                                 st.session_state.twr_result = twr_result

@@ -495,14 +495,14 @@ class ChartGenerator:
             yaxis=dict(
                 title="净资产价值 (USD)",
                 side="left",
-                titlefont=dict(color="blue"),
+                title_font=dict(color="blue"),
                 tickfont=dict(color="blue")
             ),
             yaxis2=dict(
                 title="累计收益率 (%)",
                 side="right",
                 overlaying="y",
-                titlefont=dict(color="green"),
+                title_font=dict(color="green"),
                 tickfont=dict(color="green")
             ),
             legend=dict(
