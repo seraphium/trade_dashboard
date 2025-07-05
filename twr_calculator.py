@@ -101,11 +101,30 @@ class CashFlowProcessor:
             # 标准化现金流类型
             cf_df['type'] = cf_df['type'].apply(CashFlowProcessor._standardize_cash_flow_type)
         
-        # 添加描述
+        # 添加描述并确保为字符串类型
         if 'description' not in cf_df.columns:
             cf_df['description'] = cf_df.get('activityDescription', '')
-        
-        return cf_df[['date', 'amount', 'type', 'description']].dropna(subset=['amount'])
+
+        # 确保所有字符串字段都是字符串类型，避免枚举类型导致的序列化问题
+        cf_df['description'] = cf_df['description'].astype(str)
+        cf_df['type'] = cf_df['type'].astype(str)
+
+        # 处理货币转换
+        if 'currency' in cf_df.columns:
+            cf_df = CashFlowProcessor._convert_currency_to_usd(cf_df)
+
+        # 去重处理：基于日期、金额、类型去重
+        original_count = len(cf_df)
+        cf_df = cf_df.drop_duplicates(subset=['date', 'amount', 'type'], keep='first')
+        if len(cf_df) < original_count:
+            logger.info(f"去重处理: 从 {original_count} 条记录减少到 {len(cf_df)} 条记录")
+
+        # 选择需要的列，如果有currency列也保留用于调试
+        columns_to_keep = ['date', 'amount', 'type', 'description']
+        if 'currency' in cf_df.columns:
+            columns_to_keep.append('currency')
+
+        return cf_df[columns_to_keep].dropna(subset=['amount'])
     
     @staticmethod
     def _standardize_cash_flow_type(type_str: str) -> str:
@@ -146,6 +165,38 @@ class CashFlowProcessor:
         else:
             return 'CASH_OUT'
     
+    @staticmethod
+    def _convert_currency_to_usd(cf_df: pd.DataFrame) -> pd.DataFrame:
+        """将非美元现金流转换为美元"""
+        if cf_df.empty or 'currency' not in cf_df.columns:
+            return cf_df
+
+        # 简化的汇率转换（实际应用中应该使用实时汇率）
+        # 这里使用近似汇率，实际应该从API获取历史汇率
+        exchange_rates = {
+            'USD': 1.0,
+            'HKD': 0.128,  # 1 HKD ≈ 0.128 USD (近似汇率)
+            'CNY': 0.14,   # 1 CNY ≈ 0.14 USD
+            'EUR': 1.1,    # 1 EUR ≈ 1.1 USD
+            'GBP': 1.25,   # 1 GBP ≈ 1.25 USD
+            'JPY': 0.007,  # 1 JPY ≈ 0.007 USD
+        }
+
+        cf_df = cf_df.copy()
+
+        for idx, row in cf_df.iterrows():
+            currency = row.get('currency', 'USD')
+            if currency != 'USD' and currency in exchange_rates:
+                original_amount = row['amount']
+                converted_amount = original_amount * exchange_rates[currency]
+                cf_df.at[idx, 'amount'] = converted_amount
+
+                logger.info(f"货币转换: {original_amount:.2f} {currency} -> {converted_amount:.2f} USD")
+            elif currency != 'USD':
+                logger.warning(f"未知货币类型: {currency}, 使用原始金额")
+
+        return cf_df
+
     @staticmethod
     def filter_external_cash_flows(cf_df: pd.DataFrame) -> pd.DataFrame:
         """过滤出外部现金流（排除股息、利息等投资收益）"""
@@ -201,7 +252,25 @@ class PerformanceMetrics:
         """计算年化收益率"""
         if days <= 0:
             return 0
-        return ((1 + total_return) ** (365.25 / days)) - 1
+
+        # 处理极端情况：如果总收益率小于-100%，年化收益率无意义
+        if total_return <= -1:
+            return float('nan')
+
+        try:
+            base = 1 + total_return
+            if base <= 0:
+                return float('nan')
+
+            annualized = (base ** (365.25 / days)) - 1
+
+            # 检查结果是否合理
+            if np.isnan(annualized) or np.isinf(annualized):
+                return float('nan')
+
+            return annualized
+        except (ValueError, OverflowError, ZeroDivisionError):
+            return float('nan')
     
     @staticmethod
     def calculate_volatility(returns: pd.Series, annualized: bool = True) -> float:
@@ -283,6 +352,13 @@ class TWRCalculator:
             
             # 按现金流分割时间序列
             periods = self.ts_processor.split_periods_by_cash_flows(clean_nav, external_cf)
+
+            # 调试信息：显示NAV数据范围
+            logger.info(f"NAV数据范围: {clean_nav['nav'].min():.2f} 到 {clean_nav['nav'].max():.2f}")
+            logger.info(f"外部现金流总数: {len(external_cf)}")
+            if not external_cf.empty:
+                logger.info(f"现金流金额范围: {external_cf['amount'].min():.2f} 到 {external_cf['amount'].max():.2f}")
+            logger.info(f"分割后的期间数: {len(periods)}")
             
             if not periods:
                 logger.warning("没有有效的时间区间")
@@ -298,7 +374,9 @@ class TWRCalculator:
                 detailed_periods.append(period_result)
             
             # 计算总TWR
+            logger.info(f"期间收益率列表: {[f'{r:.4f}' for r in period_returns]}")
             total_twr = self._calculate_compound_return(period_returns)
+            logger.info(f"计算得到的总TWR: {total_twr:.4f}")
             
             # 计算其他指标
             start_date = periods[0]['start_date']
@@ -306,13 +384,19 @@ class TWRCalculator:
             days = (end_date - start_date).days
             
             annualized_return = self.metrics.calculate_annualized_return(total_twr, days)
+            logger.info(f"年化收益率计算: total_twr={total_twr:.4f}, days={days}, annualized={annualized_return:.4f}")
             
             # 计算日收益率序列用于波动率计算
             daily_returns = clean_nav['nav'].pct_change().dropna()
+            # 过滤掉无穷大和NaN值
+            daily_returns = daily_returns.replace([np.inf, -np.inf], np.nan).dropna()
             volatility = self.metrics.calculate_volatility(daily_returns)
             sharpe_ratio = self.metrics.calculate_sharpe_ratio(daily_returns)
             max_drawdown, dd_start, dd_end = self.metrics.calculate_max_drawdown(clean_nav.set_index('date')['nav'])
             
+            # 生成每日TWR时间序列
+            twr_timeseries = self._generate_twr_timeseries(clean_nav, periods, detailed_periods)
+
             return {
                 'total_twr': total_twr,
                 'annualized_return': annualized_return,
@@ -328,6 +412,7 @@ class TWRCalculator:
                 'period_returns': period_returns,
                 'detailed_periods': detailed_periods,
                 'nav_data': clean_nav,
+                'twr_timeseries': twr_timeseries,  # 新增：每日TWR时间序列
                 'cash_flows': clean_cf,
                 'external_cash_flows': external_cf
             }
@@ -335,6 +420,83 @@ class TWRCalculator:
         except Exception as e:
             logger.error(f"TWR计算失败: {e}")
             return self._empty_result()
+
+    def _generate_twr_timeseries(self, nav_df: pd.DataFrame, periods: List[Dict], detailed_periods: List[Dict]) -> pd.DataFrame:
+        """生成每日TWR时间序列 - 基于真实NAV变化"""
+        try:
+            if nav_df.empty:
+                return pd.DataFrame()
+
+            # 按日期排序NAV数据
+            nav_df = nav_df.sort_values('date').reset_index(drop=True)
+
+            # 获取现金流数据
+            cash_flows = {}
+            for period in periods:
+                if period['has_cash_flow'] and not period['cash_flows'].empty:
+                    for _, cf in period['cash_flows'].iterrows():
+                        cf_date = cf['date'].date()
+                        if cf_date not in cash_flows:
+                            cash_flows[cf_date] = 0
+                        cash_flows[cf_date] += cf['amount']
+
+            # 计算每日TWR
+            twr_data = []
+            cumulative_twr = 1.0  # 累计TWR倍数
+
+            for i, (_, nav_row) in enumerate(nav_df.iterrows()):
+                current_date = nav_row['date']
+                current_nav = nav_row['nav']
+
+                if i == 0:
+                    # 第一天，TWR为0%
+                    daily_twr_return = 0.0
+                    prev_nav = current_nav
+                else:
+                    # 计算当日收益率
+                    prev_nav = nav_df.iloc[i-1]['nav']
+
+                    # 检查是否有现金流
+                    cf_amount = cash_flows.get(current_date.date(), 0)
+
+                    if cf_amount != 0:
+                        # 有现金流的日子，需要调整计算
+                        # 假设现金流发生在日末，计算调整后的收益率
+                        adjusted_nav = current_nav - cf_amount
+                        daily_return = (adjusted_nav - prev_nav) / prev_nav if prev_nav != 0 else 0
+
+                        logger.debug(f"现金流调整 {current_date.date()}: "
+                                   f"原NAV={current_nav:.2f}, 现金流={cf_amount:.2f}, "
+                                   f"调整后NAV={adjusted_nav:.2f}, 日收益率={daily_return:.4f}")
+                    else:
+                        # 无现金流，正常计算日收益率
+                        daily_return = (current_nav - prev_nav) / prev_nav if prev_nav != 0 else 0
+
+                    # 更新累计TWR
+                    cumulative_twr *= (1 + daily_return)
+                    daily_twr_return = (cumulative_twr - 1) * 100
+
+                twr_data.append({
+                    'date': current_date,
+                    'twr_return': daily_twr_return,
+                    'nav': current_nav,
+                    'daily_return': daily_return if i > 0 else 0,
+                    'cash_flow': cash_flows.get(current_date.date(), 0)
+                })
+
+            if not twr_data:
+                return pd.DataFrame()
+
+            twr_df = pd.DataFrame(twr_data)
+
+            logger.info(f"生成真实TWR时间序列: {len(twr_df)} 个数据点")
+            logger.info(f"TWR范围: {twr_df['twr_return'].min():.2f}% 到 {twr_df['twr_return'].max():.2f}%")
+
+            return twr_df
+
+        except Exception as e:
+            logger.error(f"生成TWR时间序列失败: {e}")
+            return pd.DataFrame()
     
     def _calculate_period_return(self, period: Dict) -> Dict:
         """计算单个时间区间的收益率"""
@@ -356,13 +518,52 @@ class TWRCalculator:
         
         # 如果期间有现金流，需要调整计算
         if period['has_cash_flow'] and not period['cash_flows'].empty:
-            # 简化处理：假设现金流发生在期末
-            # 更精确的方法需要考虑现金流的确切时间
             total_cf = period['cash_flows']['amount'].sum()
-            adjusted_end_nav = end_nav - total_cf
-            period_return = (adjusted_end_nav - start_nav) / start_nav if start_nav != 0 else 0
+
+            # TWR的正确计算方法：
+            # 假设现金流发生在期末，我们需要计算原有资金的收益率
+            #
+            # 如果是入金(正现金流)：
+            #   期末总NAV = 原有资金增长后的价值 + 入金金额
+            #   所以：原有资金增长后的价值 = 期末总NAV - 入金金额
+            #   收益率 = (原有资金增长后的价值 - 起始NAV) / 起始NAV
+            #
+            # 如果是出金(负现金流)：
+            #   期末总NAV = 原有资金增长后的价值 - 出金金额
+            #   所以：原有资金增长后的价值 = 期末总NAV + 出金金额
+            #   收益率 = (原有资金增长后的价值 - 起始NAV) / 起始NAV
+            #
+            # 统一公式：原有资金增长后的价值 = 期末NAV - 现金流净额
+
+            original_funds_end_value = end_nav - total_cf
+
+            # 计算收益率，即使原有资金期末价值为负也要正确计算
+            period_return = (original_funds_end_value - start_nav) / start_nav if start_nav != 0 else 0
+
+            # 详细的现金流信息
+            cf_details = []
+            for _, cf_row in period['cash_flows'].iterrows():
+                cf_details.append(f"{cf_row['date'].strftime('%Y-%m-%d')}: {cf_row['amount']:.2f} ({cf_row['type']})")
+
+            logger.info(f"期间 {period['start_date']} 到 {period['end_date']}: "
+                        f"起始NAV={start_nav:.2f}, 期末NAV={end_nav:.2f}, "
+                        f"现金流总额={total_cf:.2f}, 原有资金期末价值={original_funds_end_value:.2f}, "
+                        f"收益率={period_return:.4f}")
+            logger.info(f"现金流详情: {'; '.join(cf_details)}")
+
+            # 合理性检查
+            if abs(period_return) > 5:  # 收益率超过500%，可能有问题
+                logger.warning(f"期间收益率异常: {period_return:.4f}, 请检查数据")
+
+            # 如果原有资金期末价值为负，说明投资亏损严重
+            if original_funds_end_value < 0:
+                logger.warning(f"原有资金期末价值为负: {original_funds_end_value:.2f}, 说明投资亏损超过本金")
+
         else:
             period_return = (end_nav - start_nav) / start_nav if start_nav != 0 else 0
+            logger.info(f"期间 {period['start_date']} 到 {period['end_date']}: "
+                        f"起始NAV={start_nav:.2f}, 期末NAV={end_nav:.2f}, "
+                        f"收益率={period_return:.4f} (无现金流)")
         
         return {
             'start_date': period['start_date'],

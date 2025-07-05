@@ -75,8 +75,7 @@ PROBLEMATIC_ATTRS = [
     'orderType', 'traderID', 'isAPIOrder', 'accruedInt',
     
     # 交易数据属性（在某些查询类型中可能有问题）
-    'tradeID', 'tradePrice',
-    'proceeds', 'commission', 'buySell',
+    'tradeID',
     
     # 商品和投资属性
     'initialInvestment', 'serialNumber', 'deliveryType',
@@ -282,6 +281,12 @@ class IBKRDataFetcher:
                 price_float = safe_float(trade_price)
                 proceeds_float = safe_float(getattr(trade, 'proceeds', 0))
                 commission_float = safe_float(getattr(trade, 'ibCommission', 0))
+
+                # 如果tradePrice为空或0，从proceeds和quantity计算价格
+                if (price_float == 0 or trade_price is None) and proceeds_float != 0 and quantity_float != 0:
+                    calculated_price = abs(proceeds_float) / quantity_float
+                    logger.debug(f"从proceeds计算价格: |{proceeds_float}| / {quantity_float} = {calculated_price}")
+                    price_float = calculated_price
                 
                 trade_dict = {
                     'trade_id': trade_id,
@@ -297,6 +302,11 @@ class IBKRDataFetcher:
                     'order_time': None,  # 先简化，可以后续添加
                     'comment': ''  # 初始化评论列
                 }
+
+                # 调试：记录前几条交易的详细信息
+                if len(trades_list) < 3:
+                    logger.info(f"交易 {len(trades_list)+1}: {symbol} {side} {quantity_float} @ {price_float}")
+                    logger.info(f"  原始数据: tradePrice={trade_price}, proceeds={proceeds_float}, commission={commission_float}")
                 trades_list.append(trade_dict)
             
             df = pd.DataFrame(trades_list)
@@ -741,13 +751,20 @@ class IBKRDataFetcher:
                         if not date_time and report_date:
                             date_time = report_date
                         
+                        # 获取activityDescription并转换为字符串（避免枚举类型）
+                        activity_desc = safe_get_attr(cash_item, 'activityDescription', cash_type)
+                        if hasattr(activity_desc, 'value'):  # 如果是枚举类型
+                            activity_desc = str(activity_desc.value)
+                        else:
+                            activity_desc = str(activity_desc)
+
                         cash_dict = {
                             'reportDate': report_date,
                             'dateTime': date_time,
                             'amount': safe_float(amount),
                             'currency': safe_get_attr(cash_item, 'currency', 'USD'),
-                            'type': cash_type,
-                            'activityDescription': safe_get_attr(cash_item, 'activityDescription', cash_type),
+                            'type': str(cash_type),  # 确保类型也是字符串
+                            'activityDescription': activity_desc,
                             'symbol': safe_get_attr(cash_item, 'symbol', ''),
                             'accountId': safe_get_attr(cash_item, 'accountId', ''),
                             'tradeID': safe_get_attr(cash_item, 'tradeID', '')

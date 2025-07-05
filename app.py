@@ -379,7 +379,7 @@ def main():
         return
     
     # 创建标签页
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📋 交易记录", "📈 图表分析", "🆚 基准对比", "⏱️ TWR分析", "💬 评论管理", "📊 统计报告"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 交易记录", "📈 图表分析", "🆚 TWR & 基准对比", "💬 评论管理", "📊 统计报告"])
     
     with tab1:
         show_trades_table()
@@ -388,15 +388,12 @@ def main():
         show_charts()
     
     with tab3:
-        show_benchmark_comparison()
-    
+        show_twr_benchmark_analysis()
+
     with tab4:
-        show_twr_analysis()
-    
-    with tab5:
         show_comment_management()
-    
-    with tab6:
+
+    with tab5:
         show_statistics()
 
 def show_trades_table():
@@ -551,14 +548,24 @@ def show_charts():
     # 图表选择
     chart_type = st.selectbox(
         "选择图表类型",
-        ["交易时间线", "盈亏分析", "交易量分析", "标的分布", "评论分析", "与基准对比"]
+        ["交易时间线", "盈亏分析", "交易量分析", "标的分布", "评论分析"]
     )
     
     if chart_type == "交易时间线":
-        fig = chart_gen.create_trade_timeline(df)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.info("💡 提示：点击图例可以显示/隐藏特定标的，鼠标悬停查看详细信息")
+        # 检查是否有TWR数据
+        if st.session_state.twr_result:
+            # 使用基于TWR曲线的交易时间线
+            fig = chart_gen.create_twr_with_trades_timeline(st.session_state.twr_result, df)
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.info("💡 提示：交易标记显示在TWR曲线上，可以直观看到每笔交易对投资组合表现的影响")
+        else:
+            # 如果没有TWR数据，使用传统的交易时间线
+            fig = chart_gen.create_trade_timeline(df)
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.warning("⚠️ 未获取TWR数据，显示传统交易时间线。建议在侧边栏获取TWR数据以查看更准确的分析。")
+            st.info("💡 提示：点击图例可以显示/隐藏特定标的，鼠标悬停查看详细信息")
     
     elif chart_type == "盈亏分析":
         fig = chart_gen.create_pnl_chart(df)
@@ -577,18 +584,6 @@ def show_charts():
     elif chart_type == "评论分析":
         fig = chart_gen.create_comment_analysis(df)
         st.plotly_chart(fig, use_container_width=True)
-    
-    elif chart_type == "与基准对比":
-        if st.session_state.benchmark_data and not st.session_state.portfolio_data.empty:
-            fig = chart_gen.create_benchmark_comparison(
-                st.session_state.portfolio_data, 
-                st.session_state.benchmark_data
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            
-            st.info("💡 提示：鼠标悬停查看详细收益率，可在图例中点击隐藏/显示特定指数")
-        else:
-            st.warning("⚠️ 请先获取交易数据和基准指数数据")
 
 def show_comment_management():
     """显示评论管理"""
@@ -716,29 +711,139 @@ def show_statistics():
     st.subheader("月度统计")
     st.dataframe(monthly_stats, use_container_width=True)
 
-def show_benchmark_comparison():
-    """显示基准对比分析"""
-    st.subheader("🆚 基准对比分析")
-    
-    if st.session_state.benchmark_data and not st.session_state.portfolio_data.empty:
+
+
+def show_twr_benchmark_analysis():
+    """显示TWR分析与基准对比的合并页面"""
+    st.subheader("🆚 TWR分析 & 基准对比")
+
+    # 检查数据可用性
+    has_twr_data = bool(st.session_state.twr_result)
+    has_benchmark_data = bool(st.session_state.benchmark_data)
+
+    if not has_twr_data and not has_benchmark_data:
+        st.info("请先在侧边栏获取 TWR 数据和基准指数数据")
+
+        # 显示使用指南
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("📖 TWR 分析说明")
+            with st.expander("什么是时间加权收益率(TWR)?", expanded=True):
+                st.markdown("""
+                **时间加权收益率(Time-Weighted Return, TWR)**是一种投资绩效评估方法：
+
+                **核心特点:**
+                - 剔除现金流（入金/出金）的影响
+                - 真实反映投资策略本身的表现
+                - 适合评估投资管理能力
+
+                **计算原理:**
+                - 将投资期间按现金流事件分割为多个子区间
+                - 计算每个子区间的收益率
+                - 将各子区间收益率几何连乘
+
+                **数据需求:**
+                - 每日净资产价值(NAV)
+                - 现金流记录(入金/出金)
+                - 持仓快照(可选)
+                """)
+
+        with col2:
+            st.subheader("📊 基准对比说明")
+            with st.expander("如何进行基准对比分析", expanded=True):
+                st.markdown("""
+                1. **获取交易数据**: 在侧边栏点击"🔄 获取交易数据"
+                2. **获取TWR数据**: 点击"📈 获取 TWR 数据"
+                3. **选择基准指数**: 选择如 SPY、QQQ 等基准指数
+                4. **获取基准数据**: 点击"📈 获取基准数据"
+
+                **支持的基准指数:**
+                - **SPY**: S&P 500 ETF
+                - **QQQ**: 纳斯达克 100 ETF
+                - **VTI**: 全市场 ETF
+                - **IWM**: 小盘股 ETF
+                """)
+
+        return
+
+    # 如果有TWR数据，显示核心指标
+    if has_twr_data:
+        twr_result = st.session_state.twr_result
+
+        # 核心指标展示
+        st.subheader("📊 核心绩效指标")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric(
+                "总时间加权收益率",
+                f"{twr_result.get('total_twr', 0):.2%}",
+                help="整个投资期间的时间加权收益率"
+            )
+
+        with col2:
+            st.metric(
+                "年化收益率",
+                f"{twr_result.get('annualized_return', 0):.2%}",
+                help="基于投资天数计算的年化收益率"
+            )
+
+        with col3:
+            st.metric(
+                "年化波动率",
+                f"{twr_result.get('volatility', 0):.2%}",
+                help="收益率的年化标准差"
+            )
+
+        with col4:
+            st.metric(
+                "夏普比率",
+                f"{twr_result.get('sharpe_ratio', 0):.3f}",
+                help="风险调整后的收益率指标"
+            )
+
+        # 最大回撤信息
+        if twr_result.get('max_drawdown', 0) > 0:
+            st.warning(f"📉 最大回撤: {twr_result['max_drawdown']:.2%}")
+            if twr_result.get('max_drawdown_start') and twr_result.get('max_drawdown_end'):
+                st.info(f"回撤期间: {twr_result['max_drawdown_start'].strftime('%Y-%m-%d')} 至 {twr_result['max_drawdown_end'].strftime('%Y-%m-%d')}")
+
+        st.markdown("---")
+
+    # 主要对比图表
+    if has_twr_data and has_benchmark_data:
+        st.subheader("📈 TWR vs 基准指数收益率对比")
         chart_gen = st.session_state.chart_generator
-        benchmark_fetcher = st.session_state.benchmark_fetcher
-        
-        # 投资组合 vs 基准对比图
-        st.subheader("📈 收益率对比")
-        fig_comparison = chart_gen.create_benchmark_comparison(
-            st.session_state.portfolio_data,
+
+        # 使用新的TWR基准对比图
+        fig_comparison = chart_gen.create_twr_benchmark_comparison(
+            st.session_state.twr_result,
             st.session_state.benchmark_data
         )
         st.plotly_chart(fig_comparison, use_container_width=True)
-        
-        # 计算表现指标
+
+    elif has_twr_data:
+        # 只有TWR数据时，显示TWR时间序列
+        st.subheader("📈 TWR 时间序列分析")
+        chart_gen = st.session_state.chart_generator
+        fig_twr = chart_gen.create_twr_chart(st.session_state.twr_result)
+        st.plotly_chart(fig_twr, use_container_width=True)
+
+        st.info("💡 获取基准指数数据以查看对比分析")
+
+    elif has_benchmark_data:
+        # 只有基准数据时，提示获取TWR数据
+        st.info("💡 获取 TWR 数据以查看准确的投资组合表现对比")
+
+    # 表现指标对比
+    if has_twr_data and has_benchmark_data:
         st.subheader("📊 表现指标对比")
-        
-        # 计算投资组合指标
-        portfolio_returns = st.session_state.portfolio_data['portfolio_return']
-        portfolio_metrics = benchmark_fetcher.calculate_performance_metrics(portfolio_returns)
-        
+
+        twr_result = st.session_state.twr_result
+        benchmark_fetcher = st.session_state.benchmark_fetcher
+
         # 计算基准指标
         benchmark_metrics = {}
         for symbol, data in st.session_state.benchmark_data.items():
@@ -746,27 +851,30 @@ def show_benchmark_comparison():
                 benchmark_metrics[symbol] = benchmark_fetcher.calculate_performance_metrics(
                     data['Cumulative_Return']
                 )
-        
+
         # 显示指标对比表格
         col1, col2 = st.columns(2)
-        
+
         with col1:
-            st.markdown("**投资组合表现:**")
-            metrics_df = pd.DataFrame([{
+            st.markdown("**投资组合表现 (TWR):**")
+            twr_metrics_df = pd.DataFrame([{
                 '指标': '总收益率 (%)',
-                '值': f"{portfolio_metrics.get('total_return', 0):.2f}"
+                '值': f"{twr_result.get('total_twr', 0) * 100:.2f}"
             }, {
-                '指标': '波动率 (%)', 
-                '值': f"{portfolio_metrics.get('volatility', 0):.2f}"
+                '指标': '年化收益率 (%)',
+                '值': f"{twr_result.get('annualized_return', 0) * 100:.2f}"
+            }, {
+                '指标': '年化波动率 (%)',
+                '值': f"{twr_result.get('volatility', 0) * 100:.2f}"
             }, {
                 '指标': '最大回撤 (%)',
-                '值': f"{portfolio_metrics.get('max_drawdown', 0):.2f}"
+                '值': f"{twr_result.get('max_drawdown', 0) * 100:.2f}"
             }, {
                 '指标': '夏普比率',
-                '值': f"{portfolio_metrics.get('sharpe_ratio', 0):.3f}"
+                '值': f"{twr_result.get('sharpe_ratio', 0):.3f}"
             }])
-            st.dataframe(metrics_df, hide_index=True, use_container_width=True)
-        
+            st.dataframe(twr_metrics_df, hide_index=True, use_container_width=True)
+
         with col2:
             st.markdown("**基准指数表现:**")
             benchmark_summary = []
@@ -774,38 +882,76 @@ def show_benchmark_comparison():
                 benchmark_summary.append({
                     '指数': symbol,
                     '总收益率 (%)': f"{metrics.get('total_return', 0):.2f}",
+                    '年化收益率 (%)': f"{metrics.get('annualized_return', 0):.2f}",
                     '波动率 (%)': f"{metrics.get('volatility', 0):.2f}",
                     '最大回撤 (%)': f"{metrics.get('max_drawdown', 0):.2f}",
                     '夏普比率': f"{metrics.get('sharpe_ratio', 0):.3f}"
                 })
-            
+
             if benchmark_summary:
                 benchmark_df = pd.DataFrame(benchmark_summary)
                 st.dataframe(benchmark_df, hide_index=True, use_container_width=True)
-        
-        # 表现指标对比图
-        if benchmark_metrics:
-            fig_metrics = chart_gen.create_performance_metrics_comparison(
-                portfolio_metrics, benchmark_metrics
-            )
-            st.plotly_chart(fig_metrics, use_container_width=True)
-        
-        # 相关性分析
-        if len(st.session_state.benchmark_data) == 1:
-            st.subheader("📊 相关性分析")
-            benchmark_symbol = list(st.session_state.benchmark_data.keys())[0]
-            benchmark_data = st.session_state.benchmark_data[benchmark_symbol]
-            
-            fig_corr = chart_gen.create_rolling_correlation(
-                st.session_state.portfolio_data,
-                benchmark_data
-            )
+
+    # TWR详细分析部分
+    if has_twr_data:
+        twr_result = st.session_state.twr_result
+        chart_gen = st.session_state.chart_generator
+
+        st.markdown("---")
+
+        # 指标仪表板
+        st.subheader("🎛️ 绩效指标仪表板")
+        fig_dashboard = chart_gen.create_twr_metrics_dashboard(twr_result)
+        st.plotly_chart(fig_dashboard, use_container_width=True)
+
+        # 现金流分析
+        external_cash_flows = twr_result.get('external_cash_flows')
+        if external_cash_flows is not None and not external_cash_flows.empty:
+            st.subheader("💰 现金流影响分析")
+            fig_cf = chart_gen.create_cash_flow_impact_chart(twr_result)
+            st.plotly_chart(fig_cf, use_container_width=True)
+
+            # 现金流详情表
+            with st.expander("现金流详情", expanded=False):
+                cf_df = twr_result['external_cash_flows'].copy()
+                cf_df['date'] = cf_df['date'].dt.strftime('%Y-%m-%d')
+
+                # 转换枚举类型为字符串，避免Arrow序列化错误
+                if 'description' in cf_df.columns:
+                    cf_df['description'] = cf_df['description'].astype(str)
+                if 'type' in cf_df.columns:
+                    cf_df['type'] = cf_df['type'].astype(str)
+
+                cf_df = cf_df.rename(columns={
+                    'date': '日期',
+                    'type': '类型',
+                    'amount': '金额',
+                    'description': '描述'
+                })
+                st.dataframe(cf_df, use_container_width=True, hide_index=True)
+
+    # 相关性分析（如果有基准数据）
+    if has_twr_data and has_benchmark_data and len(st.session_state.benchmark_data) == 1:
+        st.subheader("📊 相关性分析")
+        benchmark_symbol = list(st.session_state.benchmark_data.keys())[0]
+        benchmark_data = st.session_state.benchmark_data[benchmark_symbol]
+
+        # 需要将TWR数据转换为适合相关性分析的格式
+        if 'nav_data' in twr_result and not twr_result['nav_data'].empty:
+            nav_data = twr_result['nav_data'].copy()
+            initial_nav = nav_data['nav'].iloc[0]
+            nav_data['portfolio_return'] = (nav_data['nav'] / initial_nav - 1) * 100
+            nav_data = nav_data.rename(columns={'date': 'datetime'})
+
+            fig_corr = chart_gen.create_rolling_correlation(nav_data, benchmark_data)
             st.plotly_chart(fig_corr, use_container_width=True)
-            
+
             st.info("💡 相关性说明：\n- 接近 1：高度正相关\n- 接近 0：无相关性\n- 接近 -1：高度负相关")
-        
-        # 基准指数信息
+
+    # 基准指数信息
+    if has_benchmark_data:
         st.subheader("ℹ️ 基准指数信息")
+        benchmark_fetcher = st.session_state.benchmark_fetcher
         for symbol in st.session_state.benchmark_data.keys():
             info = benchmark_fetcher.get_benchmark_info(symbol)
             with st.expander(f"{symbol} - {info['name']}"):
@@ -813,26 +959,6 @@ def show_benchmark_comparison():
                 st.write(f"**交易所:** {info['exchange']}")
                 if info['description']:
                     st.write(f"**描述:** {info['description']}")
-    
-    else:
-        st.info("请先获取交易数据和基准指数数据以进行对比分析")
-        
-        st.subheader("📖 使用指南")
-        with st.expander("如何进行基准对比分析", expanded=True):
-            st.markdown("""
-            1. **获取交易数据**: 在侧边栏点击"🔄 获取交易数据"
-            2. **选择基准指数**: 选择如 SPY、QQQ 等基准指数
-            3. **获取基准数据**: 点击"📈 获取基准数据"
-            4. **查看对比**: 返回此页面查看详细对比分析
-            
-            **支持的基准指数:**
-            - **SPY**: S&P 500 ETF
-            - **QQQ**: 纳斯达克 100 ETF  
-            - **VTI**: 全市场 ETF
-            - **IWM**: 小盘股 ETF
-            - **^GSPC**: S&P 500 指数
-            - **^IXIC**: 纳斯达克指数
-            """)
 
 def show_twr_analysis():
     """显示TWR分析页面"""
@@ -936,7 +1062,8 @@ def show_twr_analysis():
     st.plotly_chart(fig_dashboard, use_container_width=True)
     
     # 现金流分析
-    if not twr_result.get('external_cash_flows').empty:
+    external_cash_flows = twr_result.get('external_cash_flows')
+    if external_cash_flows is not None and not external_cash_flows.empty:
         st.subheader("💰 现金流影响分析")
         fig_cf = chart_gen.create_cash_flow_impact_chart(twr_result)
         st.plotly_chart(fig_cf, use_container_width=True)
@@ -945,6 +1072,13 @@ def show_twr_analysis():
         with st.expander("现金流详情", expanded=False):
             cf_df = twr_result['external_cash_flows'].copy()
             cf_df['date'] = cf_df['date'].dt.strftime('%Y-%m-%d')
+
+            # 转换枚举类型为字符串，避免Arrow序列化错误
+            if 'description' in cf_df.columns:
+                cf_df['description'] = cf_df['description'].astype(str)
+            if 'type' in cf_df.columns:
+                cf_df['type'] = cf_df['type'].astype(str)
+
             cf_df = cf_df.rename(columns={
                 'date': '日期',
                 'amount': '金额',

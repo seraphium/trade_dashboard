@@ -3,6 +3,7 @@
 """
 import os
 import pandas as pd
+import numpy as np
 import streamlit as st
 from datetime import datetime, timedelta
 import logging
@@ -195,8 +196,9 @@ class BenchmarkDataFetcher:
                 # 计算累计收益率
                 df['Cumulative_Return'] = (df['Close'] / df['Close'].iloc[0] - 1) * 100
                 
-                # 计算每日收益率
+                # 计算每日收益率，处理可能的NaN值
                 df['Daily_Return'] = df['Close'].pct_change() * 100
+                df['Daily_Return'] = df['Daily_Return'].fillna(0)
                 
                 logger.info(f"成功获取 {symbol} 的 {len(df)} 条数据")
                 return df
@@ -243,116 +245,285 @@ class BenchmarkDataFetcher:
     
     def calculate_portfolio_performance(self, trades_df: pd.DataFrame, initial_capital: float = 100000) -> pd.DataFrame:
         """
-        计算投资组合表现
-        
+        计算投资组合表现（改进版本，考虑持仓价值）
+
         Args:
             trades_df: 交易数据
             initial_capital: 初始资金
-            
+
         Returns:
             DataFrame: 投资组合每日表现数据
         """
         if trades_df.empty:
             return pd.DataFrame()
-        
+
         try:
             # 按日期排序
             trades_df = trades_df.sort_values('datetime')
-            
-            # 计算每笔交易的盈亏
+
+            # 计算每笔交易的现金流影响
             trades_df = trades_df.copy()
-            trades_df['pnl'] = trades_df.apply(
-                lambda row: row['proceeds'] - row['commission'] if row['side'] == 'SELL' 
-                else -(row['proceeds'] + row['commission']),
+            trades_df['cash_flow'] = trades_df.apply(
+                lambda row: -(row['proceeds'] + row['commission']) if row['side'] == 'BUY'
+                else row['proceeds'] - row['commission'],
                 axis=1
             )
-            
-            # 计算累计盈亏
-            trades_df['cumulative_pnl'] = trades_df['pnl'].cumsum()
-            
-            # 创建每日组合价值数据
-            daily_portfolio = trades_df.groupby(trades_df['datetime'].dt.date).agg({
-                'cumulative_pnl': 'last'
-            }).reset_index()
-            
-            daily_portfolio['datetime'] = pd.to_datetime(daily_portfolio['datetime'])
-       
-            # 确保时间列没有时区信息
-            if hasattr(daily_portfolio['datetime'].dtype, 'tz') and daily_portfolio['datetime'].dtype.tz is not None:
-                daily_portfolio['datetime'] = daily_portfolio['datetime'].dt.tz_localize(None)
-            
-            daily_portfolio['portfolio_value'] = initial_capital + daily_portfolio['cumulative_pnl']
-            daily_portfolio['portfolio_return'] = (daily_portfolio['portfolio_value'] / initial_capital - 1) * 100
-            
+
+            # 计算每日持仓变化
+            daily_positions = self._calculate_daily_positions(trades_df)
+
+            # 计算每日组合价值
+            daily_portfolio = self._calculate_daily_portfolio_value(
+                trades_df, daily_positions, initial_capital
+            )
+
             return daily_portfolio
-            
+
         except Exception as e:
             logger.error(f"计算投资组合表现失败: {str(e)}")
+            return pd.DataFrame()
+
+    def _calculate_daily_positions(self, trades_df: pd.DataFrame) -> pd.DataFrame:
+        """计算每日持仓情况"""
+        try:
+            # 创建每日持仓记录
+            position_records = []
+
+            # 按日期分组处理交易
+            for date, day_trades in trades_df.groupby(trades_df['datetime'].dt.date):
+                for symbol in day_trades['symbol'].unique():
+                    symbol_trades = day_trades[day_trades['symbol'] == symbol]
+
+                    # 计算当日该标的的净持仓变化
+                    net_quantity = 0
+                    weighted_avg_price = 0
+                    total_cost = 0
+
+                    for _, trade in symbol_trades.iterrows():
+                        quantity = trade['quantity'] if trade['side'] == 'BUY' else -trade['quantity']
+                        cost = trade['proceeds'] + trade['commission']
+
+                        net_quantity += quantity
+                        total_cost += cost if trade['side'] == 'BUY' else 0
+
+                    if net_quantity != 0:
+                        weighted_avg_price = total_cost / abs(net_quantity) if total_cost > 0 else trade['price']
+
+                    position_records.append({
+                        'date': pd.to_datetime(date),
+                        'symbol': symbol,
+                        'quantity_change': net_quantity,
+                        'avg_price': weighted_avg_price
+                    })
+
+            if not position_records:
+                return pd.DataFrame()
+
+            positions_df = pd.DataFrame(position_records)
+
+            # 计算累计持仓
+            cumulative_positions = []
+            current_positions = {}
+
+            for date in sorted(positions_df['date'].unique()):
+                day_changes = positions_df[positions_df['date'] == date]
+
+                # 更新当前持仓
+                for _, change in day_changes.iterrows():
+                    symbol = change['symbol']
+                    if symbol not in current_positions:
+                        current_positions[symbol] = {'quantity': 0, 'avg_price': 0}
+
+                    old_qty = current_positions[symbol]['quantity']
+                    new_qty_change = change['quantity_change']
+                    new_qty = old_qty + new_qty_change
+
+                    # 更新平均成本价
+                    if new_qty != 0 and new_qty_change > 0:  # 买入时更新成本价
+                        old_cost = old_qty * current_positions[symbol]['avg_price']
+                        new_cost = new_qty_change * change['avg_price']
+                        current_positions[symbol]['avg_price'] = (old_cost + new_cost) / new_qty
+
+                    current_positions[symbol]['quantity'] = new_qty
+
+                # 记录当日持仓
+                for symbol, pos in current_positions.items():
+                    if pos['quantity'] != 0:  # 只记录非零持仓
+                        cumulative_positions.append({
+                            'date': date,
+                            'symbol': symbol,
+                            'quantity': pos['quantity'],
+                            'avg_price': pos['avg_price']
+                        })
+
+            return pd.DataFrame(cumulative_positions)
+
+        except Exception as e:
+            logger.error(f"计算每日持仓失败: {str(e)}")
+            return pd.DataFrame()
+
+    def _calculate_daily_portfolio_value(self, trades_df: pd.DataFrame,
+                                       positions_df: pd.DataFrame,
+                                       initial_capital: float) -> pd.DataFrame:
+        """计算每日投资组合价值"""
+        try:
+            # 计算每日现金流
+            daily_cash_flow = trades_df.groupby(trades_df['datetime'].dt.date)['cash_flow'].sum().reset_index()
+            daily_cash_flow['datetime'] = pd.to_datetime(daily_cash_flow['datetime'])
+            daily_cash_flow['cumulative_cash_flow'] = daily_cash_flow['cash_flow'].cumsum()
+
+            # 计算每日现金余额
+            daily_cash_flow['cash_balance'] = initial_capital + daily_cash_flow['cumulative_cash_flow']
+
+            # 如果没有持仓数据，只计算现金部分
+            if positions_df.empty:
+                daily_cash_flow['portfolio_value'] = daily_cash_flow['cash_balance']
+                daily_cash_flow['portfolio_return'] = (daily_cash_flow['portfolio_value'] / initial_capital - 1) * 100
+                return daily_cash_flow[['datetime', 'portfolio_value', 'portfolio_return']]
+
+            # 合并现金和持仓数据
+            all_dates = sorted(set(daily_cash_flow['datetime'].dt.date) | set(positions_df['date'].dt.date))
+
+            portfolio_values = []
+
+            for date in all_dates:
+                date_pd = pd.to_datetime(date)
+
+                # 获取当日现金余额
+                cash_data = daily_cash_flow[daily_cash_flow['datetime'] <= date_pd]
+                cash_balance = cash_data['cash_balance'].iloc[-1] if not cash_data.empty else initial_capital
+
+                # 获取当日持仓价值（使用最新价格作为估值）
+                positions_value = 0
+                date_positions = positions_df[positions_df['date'] <= date_pd]
+
+                if not date_positions.empty:
+                    # 获取每个标的的最新持仓
+                    latest_positions = date_positions.groupby('symbol').last().reset_index()
+
+                    for _, pos in latest_positions.iterrows():
+                        # 使用最新交易价格作为估值价格
+                        symbol_trades = trades_df[
+                            (trades_df['symbol'] == pos['symbol']) &
+                            (trades_df['datetime'].dt.date <= date)
+                        ]
+
+                        if not symbol_trades.empty:
+                            latest_price = symbol_trades.iloc[-1]['price']
+                            positions_value += pos['quantity'] * latest_price
+
+                total_value = cash_balance + positions_value
+                portfolio_return = (total_value / initial_capital - 1) * 100
+
+                portfolio_values.append({
+                    'datetime': date_pd,
+                    'portfolio_value': total_value,
+                    'portfolio_return': portfolio_return,
+                    'cash_balance': cash_balance,
+                    'positions_value': positions_value
+                })
+
+            result_df = pd.DataFrame(portfolio_values)
+
+            # 确保时间列没有时区信息
+            if hasattr(result_df['datetime'].dtype, 'tz') and result_df['datetime'].dtype.tz is not None:
+                result_df['datetime'] = result_df['datetime'].dt.tz_localize(None)
+
+            return result_df
+
+        except Exception as e:
+            logger.error(f"计算每日投资组合价值失败: {str(e)}")
             return pd.DataFrame()
     
     def calculate_performance_metrics(self, returns_series: pd.Series) -> Dict[str, float]:
         """
         计算表现指标
-        
+
         Args:
-            returns_series: 收益率序列 (百分比)
-            
+            returns_series: 累计收益率序列 (百分比)
+
         Returns:
             Dict: 表现指标
         """
         try:
             metrics = {}
-            
-            # 基础统计
+
+            if len(returns_series) == 0:
+                return self._empty_metrics()
+
+            # 确保数据是数值类型且处理无效值
+            returns_series = pd.to_numeric(returns_series, errors='coerce').fillna(0)
+
+            # 基础统计 - 总收益率
             metrics['total_return'] = returns_series.iloc[-1] if len(returns_series) > 0 else 0
-            
+
             # 计算日收益率用于其他指标计算
             if len(returns_series) > 1:
-                daily_returns = returns_series.pct_change().dropna()
-                
-                # 平均日收益率
-                metrics['avg_daily_return'] = daily_returns.mean()
-                
-                # 年化收益率 (假设252个交易日)
-                metrics['annualized_return'] = (1 + daily_returns.mean()) ** 252 - 1
-                
-                # 收益率波动率 (年化)
-                metrics['volatility'] = daily_returns.std() * (252 ** 0.5)
-                
-                # 夏普比率 (假设无风险利率为2%)
-                risk_free_rate = 0.02
-                if metrics['volatility'] > 0:
-                    metrics['sharpe_ratio'] = (metrics['annualized_return'] - risk_free_rate) / metrics['volatility']
+                # 从累计收益率计算日收益率
+                # 累计收益率是百分比，需要转换为小数进行计算
+                cumulative_decimal = returns_series / 100  # 转换为小数
+
+                # 计算每日收益率
+                daily_returns = []
+                for i in range(1, len(cumulative_decimal)):
+                    prev_value = 1 + cumulative_decimal.iloc[i-1]
+                    curr_value = 1 + cumulative_decimal.iloc[i]
+                    daily_return = (curr_value / prev_value) - 1 if prev_value != 0 else 0
+                    daily_returns.append(daily_return)
+
+                daily_returns = pd.Series(daily_returns)
+                # 过滤掉无穷大和NaN值
+                daily_returns = daily_returns.replace([np.inf, -np.inf], np.nan).dropna()
+
+                if len(daily_returns) > 0:
+                    # 平均日收益率
+                    metrics['avg_daily_return'] = daily_returns.mean()
+
+                    # 年化收益率 (假设252个交易日)
+                    if daily_returns.mean() > -1:  # 避免负数开方
+                        metrics['annualized_return'] = ((1 + daily_returns.mean()) ** 252 - 1) * 100
+                    else:
+                        metrics['annualized_return'] = -100
+
+                    # 收益率波动率 (年化，百分比)
+                    metrics['volatility'] = daily_returns.std() * (252 ** 0.5) * 100
+
+                    # 夏普比率 (假设无风险利率为2%)
+                    risk_free_rate = 0.02
+                    annualized_return_decimal = metrics['annualized_return'] / 100
+                    volatility_decimal = metrics['volatility'] / 100
+
+                    if volatility_decimal > 0:
+                        metrics['sharpe_ratio'] = (annualized_return_decimal - risk_free_rate) / volatility_decimal
+                    else:
+                        metrics['sharpe_ratio'] = 0
+
+                    # 最大回撤
+                    cumulative_values = (1 + daily_returns).cumprod()
+                    rolling_max = cumulative_values.expanding().max()
+                    drawdown = (cumulative_values - rolling_max) / rolling_max
+                    metrics['max_drawdown'] = abs(drawdown.min()) * 100  # 转换为正的百分比
                 else:
-                    metrics['sharpe_ratio'] = 0
-                
-                # 最大回撤
-                cumulative = (1 + daily_returns).cumprod()
-                rolling_max = cumulative.expanding().max()
-                drawdown = (cumulative - rolling_max) / rolling_max
-                metrics['max_drawdown'] = drawdown.min()
-                
+                    metrics.update(self._empty_metrics())
             else:
-                metrics.update({
-                    'avg_daily_return': 0,
-                    'annualized_return': 0,
-                    'volatility': 0,
-                    'sharpe_ratio': 0,
-                    'max_drawdown': 0
-                })
-            
+                metrics.update(self._empty_metrics())
+
             return metrics
-            
+
         except Exception as e:
             logger.error(f"计算表现指标失败: {str(e)}")
-            return {
-                'total_return': 0,
-                'avg_daily_return': 0,
-                'annualized_return': 0,
-                'volatility': 0,
-                'sharpe_ratio': 0,
-                'max_drawdown': 0
-            }
+            return self._empty_metrics()
+
+    def _empty_metrics(self) -> Dict[str, float]:
+        """返回空的指标字典"""
+        return {
+            'total_return': 0,
+            'avg_daily_return': 0,
+            'annualized_return': 0,
+            'volatility': 0,
+            'sharpe_ratio': 0,
+            'max_drawdown': 0
+        }
     
     def get_benchmark_info(self, symbol: str) -> Dict[str, str]:
         """
@@ -451,7 +622,7 @@ class BenchmarkDataFetcher:
             # 使用简单的请求测试连接
             import datetime
             today = datetime.date.today()
-            yesterday = today - datetime.timedelta(days=1)
+            yesterday = today - datetime.timedelta(days=10)
             
             url = (
                 f'{self.BASE_URL}'
@@ -523,6 +694,7 @@ class BenchmarkDataFetcher:
             # 计算收益率
             df['Cumulative_Return'] = (df['Close'] / df['Close'].iloc[0] - 1) * 100
             df['Daily_Return'] = df['Close'].pct_change() * 100
+            df['Daily_Return'] = df['Daily_Return'].fillna(0)
             
             logger.info(f"生成了 {symbol} 的 {len(df)} 条模拟数据")
             return df

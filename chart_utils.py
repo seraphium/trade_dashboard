@@ -91,6 +91,119 @@ class ChartGenerator:
         )
         
         return fig
+
+    def create_twr_with_trades_timeline(self, twr_result: Dict[str, Any], trades_df: pd.DataFrame, height: int = 600) -> go.Figure:
+        """创建基于TWR曲线的交易时间线图表"""
+        fig = go.Figure()
+
+        # 首先添加TWR曲线
+        if twr_result and 'twr_timeseries' in twr_result and not twr_result['twr_timeseries'].empty:
+            twr_data = twr_result['twr_timeseries'].copy()
+
+            # 添加TWR曲线
+            fig.add_trace(go.Scatter(
+                x=twr_data['date'],
+                y=twr_data['twr_return'],
+                mode='lines',
+                name='TWR收益率曲线',
+                line=dict(width=3, color='#2E86AB'),
+                hovertemplate='日期: %{x}<br>TWR收益率: %{y:.2f}%<extra></extra>'
+            ))
+
+            # 获取TWR数据的时间范围
+            twr_start_date = twr_data['date'].min()
+            twr_end_date = twr_data['date'].max()
+
+            # 过滤交易数据，只保留在TWR时间范围内的交易
+            if not trades_df.empty:
+                trades_df = trades_df.copy()
+                trades_df['datetime'] = pd.to_datetime(trades_df['datetime'])
+
+                # 过滤交易时间
+                filtered_trades = trades_df[
+                    (trades_df['datetime'].dt.date >= twr_start_date.date()) &
+                    (trades_df['datetime'].dt.date <= twr_end_date.date())
+                ]
+
+                if not filtered_trades.empty:
+                    # 为每笔交易找到对应的TWR值
+                    trade_twr_values = []
+
+                    for _, trade in filtered_trades.iterrows():
+                        trade_date = trade['datetime'].date()
+
+                        # 找到最接近的TWR数据点
+                        twr_data['date_only'] = twr_data['date'].dt.date
+                        closest_twr = twr_data[twr_data['date_only'] <= trade_date]
+
+                        if not closest_twr.empty:
+                            twr_value = closest_twr.iloc[-1]['twr_return']
+                            trade_twr_values.append(twr_value)
+                        else:
+                            # 如果找不到对应的TWR值，使用第一个TWR值
+                            trade_twr_values.append(twr_data['twr_return'].iloc[0])
+
+                    filtered_trades = filtered_trades.copy()
+                    filtered_trades['twr_value'] = trade_twr_values
+
+                    # 按符号分组添加交易标记
+                    symbols = filtered_trades['symbol'].unique()
+
+                    for symbol in symbols:
+                        symbol_trades = filtered_trades[filtered_trades['symbol'] == symbol]
+
+                        # 买入点
+                        buys = symbol_trades[symbol_trades['side'] == 'BUY']
+                        if not buys.empty:
+                            fig.add_trace(go.Scatter(
+                                x=buys['datetime'],
+                                y=buys['twr_value'],
+                                mode='markers',
+                                marker=dict(
+                                    symbol='triangle-up',
+                                    size=12,
+                                    color='green',
+                                    line=dict(width=2, color='darkgreen')
+                                ),
+                                name=f'{symbol} 买入',
+                                text=buys.apply(lambda row: f"买入 {row['quantity']} {row['symbol']} @ ${row['price']:.2f}<br>TWR: {row['twr_value']:.2f}%<br>评论: {row['comment'][:50]}{'...' if len(row['comment']) > 50 else ''}", axis=1),
+                                hovertemplate='%{text}<extra></extra>',
+                                showlegend=True
+                            ))
+
+                        # 卖出点
+                        sells = symbol_trades[symbol_trades['side'] == 'SELL']
+                        if not sells.empty:
+                            fig.add_trace(go.Scatter(
+                                x=sells['datetime'],
+                                y=sells['twr_value'],
+                                mode='markers',
+                                marker=dict(
+                                    symbol='triangle-down',
+                                    size=12,
+                                    color='red',
+                                    line=dict(width=2, color='darkred')
+                                ),
+                                name=f'{symbol} 卖出',
+                                text=sells.apply(lambda row: f"卖出 {row['quantity']} {row['symbol']} @ ${row['price']:.2f}<br>TWR: {row['twr_value']:.2f}%<br>评论: {row['comment'][:50]}{'...' if len(row['comment']) > 50 else ''}", axis=1),
+                                hovertemplate='%{text}<extra></extra>',
+                                showlegend=True
+                            ))
+
+        # 添加零线
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
+
+        fig.update_layout(
+            title="TWR曲线 & 交易时间线分析",
+            xaxis_title="时间",
+            yaxis_title="TWR收益率 (%)",
+            template=self.theme,
+            height=height,
+            hovermode='closest',
+            showlegend=False  # 不显示图例，节省空间
+        )
+
+        return fig
     
     def create_pnl_chart(self, trades_df: pd.DataFrame) -> go.Figure:
         """创建盈亏分析图表"""
@@ -652,7 +765,8 @@ class ChartGenerator:
     
     def create_cash_flow_impact_chart(self, twr_result: Dict[str, Any]) -> go.Figure:
         """创建现金流影响分析图表"""
-        if not twr_result or twr_result.get('external_cash_flows').empty:
+        external_cash_flows = twr_result.get('external_cash_flows') if twr_result else None
+        if not twr_result or external_cash_flows is None or external_cash_flows.empty:
             fig = go.Figure()
             fig.add_annotation(
                 text="暂无现金流数据",
@@ -696,8 +810,17 @@ class ChartGenerator:
             line=dict(width=1, color='gray')
         ), row=1, col=2)
         
-        # 零线
-        fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5, row=1, col=2)
+        # 零线 - 只添加到散点图子图
+        fig.add_shape(
+            type="line",
+            x0=cash_flows['date'].min(),
+            x1=cash_flows['date'].max(),
+            y0=0,
+            y1=0,
+            line=dict(dash="dash", color="gray", width=1),
+            opacity=0.5,
+            row=1, col=2
+        )
         
         fig.update_layout(
             title="现金流影响分析",
@@ -706,4 +829,55 @@ class ChartGenerator:
             showlegend=False
         )
         
-        return fig 
+        return fig
+
+    def create_twr_benchmark_comparison(self, twr_result: Dict[str, Any], benchmark_data: Dict[str, pd.DataFrame]) -> go.Figure:
+        """创建TWR与基准指数对比图表"""
+        fig = go.Figure()
+
+        # 添加TWR表现线
+        if twr_result and 'twr_timeseries' in twr_result and not twr_result['twr_timeseries'].empty:
+            twr_data = twr_result['twr_timeseries'].copy()
+
+            fig.add_trace(go.Scatter(
+                x=twr_data['date'],
+                y=twr_data['twr_return'],
+                mode='lines',
+                name='我的投资组合 (TWR)',
+                line=dict(width=3, color='#2E86AB'),
+                hovertemplate='日期: %{x}<br>TWR收益率: %{y:.2f}%<extra></extra>'
+            ))
+
+        # 添加基准指数线
+        colors = ['#A23B72', '#F18F01', '#C73E1D', '#592941', '#3F7CAC']
+        for i, (symbol, data) in enumerate(benchmark_data.items()):
+            if not data.empty:
+                fig.add_trace(go.Scatter(
+                    x=data['Date'],
+                    y=data['Cumulative_Return'],
+                    mode='lines',
+                    name=f'{symbol}',
+                    line=dict(width=2, color=colors[i % len(colors)]),
+                    hovertemplate=f'{symbol}<br>日期: %{{x}}<br>收益率: %{{y:.2f}}%<extra></extra>'
+                ))
+
+        # 添加零线
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
+
+        fig.update_layout(
+            title="投资组合(TWR) vs 基准指数表现对比",
+            xaxis_title="时间",
+            yaxis_title="累计收益率 (%)",
+            template=self.theme,
+            height=600,
+            hovermode='x unified',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=-0.15,
+                xanchor="center",
+                x=0.5
+            )
+        )
+
+        return fig
