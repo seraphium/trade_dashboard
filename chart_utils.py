@@ -52,7 +52,7 @@ class ChartGenerator:
                         line=dict(width=2, color='darkgreen')
                     ),
                     name=f'{symbol} 买入',
-                    text=buys.apply(lambda row: f"买入 {row['quantity']} @ ${row['price']:.2f}<br>评论: {row['comment'][:50]}{'...' if len(row['comment']) > 50 else ''}", axis=1),
+                    text=buys.apply(lambda row: f"买入 {row['quantity']} @ ${row['price']:.2f}<br>评论: {str(row['comment'])[:50] if pd.notna(row['comment']) and str(row['comment']).strip() else '无'}{'...' if pd.notna(row['comment']) and len(str(row['comment'])) > 50 else ''}", axis=1),
                     hovertemplate='%{text}<extra></extra>'
                 ))
             
@@ -70,7 +70,7 @@ class ChartGenerator:
                         line=dict(width=2, color='darkred')
                     ),
                     name=f'{symbol} 卖出',
-                    text=sells.apply(lambda row: f"卖出 {row['quantity']} @ ${row['price']:.2f}<br>评论: {row['comment'][:50]}{'...' if len(row['comment']) > 50 else ''}", axis=1),
+                    text=sells.apply(lambda row: f"卖出 {row['quantity']} @ ${row['price']:.2f}<br>评论: {str(row['comment'])[:50] if pd.notna(row['comment']) and str(row['comment']).strip() else '无'}{'...' if pd.notna(row['comment']) and len(str(row['comment'])) > 50 else ''}", axis=1),
                     hovertemplate='%{text}<extra></extra>'
                 ))
         
@@ -166,7 +166,7 @@ class ChartGenerator:
                                     line=dict(width=2, color='darkgreen')
                                 ),
                                 name=f'{symbol} 买入',
-                                text=buys.apply(lambda row: f"买入 {row['quantity']} {row['symbol']} @ ${row['price']:.2f}<br>TWR: {row['twr_value']:.2f}%<br>评论: {row['comment'][:50]}{'...' if len(row['comment']) > 50 else ''}", axis=1),
+                                text=buys.apply(lambda row: f"买入 {row['quantity']} {row['symbol']} @ ${row['price']:.2f}<br>TWR: {row['twr_value']:.2f}%<br>评论: {str(row['comment'])[:50] if pd.notna(row['comment']) and str(row['comment']).strip() else '无'}{'...' if pd.notna(row['comment']) and len(str(row['comment'])) > 50 else ''}", axis=1),
                                 hovertemplate='%{text}<extra></extra>',
                                 showlegend=True
                             ))
@@ -185,7 +185,7 @@ class ChartGenerator:
                                     line=dict(width=2, color='darkred')
                                 ),
                                 name=f'{symbol} 卖出',
-                                text=sells.apply(lambda row: f"卖出 {row['quantity']} {row['symbol']} @ ${row['price']:.2f}<br>TWR: {row['twr_value']:.2f}%<br>评论: {row['comment'][:50]}{'...' if len(row['comment']) > 50 else ''}", axis=1),
+                                text=sells.apply(lambda row: f"卖出 {row['quantity']} {row['symbol']} @ ${row['price']:.2f}<br>TWR: {row['twr_value']:.2f}%<br>评论: {str(row['comment'])[:50] if pd.notna(row['comment']) and str(row['comment']).strip() else '无'}{'...' if pd.notna(row['comment']) and len(str(row['comment'])) > 50 else ''}", axis=1),
                                 hovertemplate='%{text}<extra></extra>',
                                 showlegend=True
                             ))
@@ -545,7 +545,15 @@ class ChartGenerator:
     
     def create_twr_chart(self, twr_result: Dict[str, Any]) -> go.Figure:
         """创建TWR分析图表"""
-        if not twr_result or twr_result.get('nav_data').empty:
+        # 检查是否有TWR数据
+        nav_data = None
+        if twr_result and 'nav_data' in twr_result and not twr_result['nav_data'].empty:
+            nav_data = twr_result['nav_data']
+        elif twr_result and 'twr_timeseries' in twr_result and not twr_result['twr_timeseries'].empty:
+            # 如果没有nav_data但有twr_timeseries，使用twr_timeseries中的数据
+            nav_data = twr_result['twr_timeseries'][['date', 'nav']].copy()
+        
+        if nav_data is None or nav_data.empty:
             fig = go.Figure()
             fig.add_annotation(
                 text="暂无TWR数据",
@@ -554,8 +562,6 @@ class ChartGenerator:
                 showarrow=False, font_size=16
             )
             return fig
-        
-        nav_data = twr_result['nav_data']
         
         # 计算累计收益率
         nav_data = nav_data.copy()
@@ -585,8 +591,9 @@ class ChartGenerator:
         ))
         
         # 标记现金流事件
-        if not twr_result.get('external_cash_flows').empty:
-            cash_flows = twr_result['external_cash_flows']
+        external_cash_flows = twr_result.get('external_cash_flows')
+        if external_cash_flows is not None and not external_cash_flows.empty:
+            cash_flows = external_cash_flows
             for _, cf in cash_flows.iterrows():
                 color = 'red' if cf['amount'] < 0 else 'orange'
                 fig.add_trace(go.Scatter(
@@ -601,7 +608,7 @@ class ChartGenerator:
         
         # 创建双y轴布局
         fig.update_layout(
-            title=f"时间加权收益率分析 (TWR: {twr_result['total_twr']:.2%})",
+            title=f"时间加权收益率分析 - 累计收益率 (TWR: {twr_result['total_twr']:.2%})",
             xaxis_title="日期",
             template=self.theme,
             height=500,
@@ -865,7 +872,7 @@ class ChartGenerator:
         fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
 
         fig.update_layout(
-            title="投资组合(TWR) vs 基准指数表现对比",
+            title="投资组合(TWR) vs 基准指数累计收益率对比",
             xaxis_title="时间",
             yaxis_title="累计收益率 (%)",
             template=self.theme,

@@ -1,3 +1,6 @@
+# 缓存数据目录
+cached_data/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -16,71 +19,48 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
 
-# PyInstaller
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
 # Streamlit
 .streamlit/
 
-# 敏感配置文件 (包含 API 密钥)
+# 配置文件（包含敏感信息）
 config.yaml
+.env
 
-# 数据文件
-trade_comments.json
-*.csv
-*.json
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp
+*.temp
+
+# 评论数据（可选，如果不想同步评论）
+# comments.json
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
-# OS
+# 操作系统
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
-# 日志文件
-*.log
-logs/ 
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 虚拟环境
+venv/
+env/
+ENV/ 
+
+*.json

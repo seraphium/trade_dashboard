@@ -89,6 +89,10 @@ class CommentManager:
         trades_df['comment'] = trades_df['trade_id'].apply(self.get_comment)
         trades_df['comment_category'] = trades_df['trade_id'].apply(self.get_comment_category)
         
+        # 确保comment列为字符串类型
+        trades_df['comment'] = trades_df['comment'].fillna('').astype(str)
+        trades_df['comment_category'] = trades_df['comment_category'].fillna('Neutral').astype(str)
+        
         return trades_df
     
     def get_comment_statistics(self) -> Dict:

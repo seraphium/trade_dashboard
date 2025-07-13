@@ -1,293 +1,258 @@
-# 📈 IBKR 交易复盘分析平台
+# IBKR 交易面板
 
-基于 Streamlit 的 Interactive Brokers (IBKR) 交易记录管理和分析系统，帮助您轻松进行交易复盘和分析。
+一个基于 Streamlit 的交互式交易分析工具，支持从 IBKR Flex API 获取数据并进行深度分析。
 
-## ✨ 功能特性
+## 功能特性
 
-- 🔗 **自动数据获取**: 通过 IBKR Flex API 自动获取历史交易记录
-- 📊 **可视化分析**: 多种图表展示交易表现和趋势
-- 📝 **交易评论**: 为每笔交易添加个人评论和分析
-- 💾 **数据持久化**: 自动保存评论到本地 JSON 文件
-- 🔍 **智能筛选**: 多维度数据过滤和搜索功能
-- 📈 **统计报告**: 详细的交易统计和分析报告
-- 📱 **响应式设计**: 现代化的 Web 界面，支持各种设备
+- 📊 **交易数据分析**: 可视化交易记录、盈亏分析、交易量统计
+- ⏱️ **时间加权收益率(TWR)**: 专业的投资绩效评估，剔除现金流影响
+- 📈 **基准指数对比**: 与主流指数进行表现对比分析
+- 💬 **交易评论管理**: 为交易添加评论和标签
+- 🔄 **实时数据更新**: 支持定期刷新数据
 
-## 🚀 快速开始
+## 重要更新说明
+
+### TWR收益率计算逻辑修复 (v2.1)
+
+**问题1**: 之前的TWR收益率显示为累计复合收益率，导致数值异常偏高（每天显示百分之十几、二十），与基准指数（2-3%）无法进行有效对比。
+
+**问题2**: 现金流调整逻辑错误，导致有现金流的日子出现异常波动（如从2%一天内跳到20%）。
+
+**解决方案**: 
+- **v2.1.0**: 修改TWR时间序列计算逻辑，使其显示累计收益率而非累计复合收益率
+- **v2.1.1**: 完全重写现金流调整逻辑，使用正确的时间加权收益率计算方法
+- 使用标准TWR公式：每日收益率 = (调整后NAV - 前日NAV) / 前日NAV
+- 累计TWR = ∏(1 + 日收益率) - 1，避免简单的NAV减法调整
+
+**计算方式对比**:
+- **修正前**: 简单减法调整 `(NAV - 现金流) / 初始NAV - 1`，导致异常波动
+- **修正后**: 标准TWR计算 `∏(1 + r_i) - 1`，其中 `r_i = (调整后NAV_i - NAV_{i-1}) / NAV_{i-1}`
+
+## 安装和配置
 
 ### 1. 环境要求
 
-- Python 3.10 或更高版本
-- IBKR 账户（用于获取 Flex API 访问权限）
+- Python 3.8+
+- IBKR 账户和 Flex Query 配置
+- Financial Datasets API 密钥（可选，用于基准指数数据）
 
 ### 2. 安装依赖
 
 ```bash
-# 克隆或下载项目到本地
-cd trade_dashboard
-
-# 安装 Python 依赖
 pip install -r requirements.txt
 ```
 
-### 3. 配置 IBKR Flex API
+### 3. 配置设置
 
-#### 3.1 创建 Flex Query
+复制 `config.example.yaml` 为 `config.yaml` 并填入您的配置：
 
-1. 登录您的 [IBKR 账户管理](https://www.interactivebrokers.com/en/index.php)
-2. 导航到 **Reports** → **Flex Queries**
-3. 点击 **Create** 创建新的 Flex Query
-4. 选择以下配置：
-   - **Query Type**: Activity Flex Query
-   - **Sections**: 勾选 "Trades"
-   - **Date Period**: 选择合适的日期范围
-   - **Format**: XML
-5. 保存 Query 并记录生成的 **Query ID**
-
-#### 3.2 生成 Flex Token
-
-1. 在同一页面，点击 **Generate Token**
-2. 记录生成的 **Flex Web Service Token**
-
-#### 3.3 配置应用
-
-有两种配置方式（推荐使用 `.env` 文件）：
-
-**方式一：使用 .env 文件（推荐）**
-
-1. 复制 `env.example` 文件为 `.env`：
-   ```bash
-   cp env.example .env
-   ```
-
-2. 编辑 `.env` 文件：
-   ```
-   IBKR_FLEX_TOKEN=your_actual_flex_token_here
-   IBKR_QUERY_ID=your_actual_query_id_here
-   FINANCIAL_DATASETS_API_KEY=your_financial_datasets_api_key_here
-   ```
-
-3. 获取 Financial Datasets API 密钥：
-   - 访问 [Financial Datasets](https://financialdatasets.ai)
-   - 创建账户并获取 API 密钥
-   - 将密钥填入 `.env` 文件中
-
-**方式二：使用 config.yaml 文件**
-
-编辑 `config.yaml` 文件：
 ```yaml
 ibkr:
-  flex_token: "YOUR_FLEX_TOKEN_HERE"  # 替换为您的 Flex Token
-  query_id: "YOUR_QUERY_ID_HERE"     # 替换为您的 Query ID
+  flex_token: "your_flex_token_here"
+  trades_query_id: "your_trades_query_id"
+  performance_query_id: "your_performance_query_id"  # 用于TWR分析
 
 financial_datasets:
-  api_key: "YOUR_FINANCIAL_DATASETS_API_KEY_HERE"  # 替换为您的 Financial Datasets API 密钥
+  api_key: "your_api_key_here"  # 可选
 ```
 
-> **注意：** 如果同时存在 `.env` 和 `config.yaml`，系统将优先使用 `.env` 文件中的配置。
+或者使用环境变量：
+
+```bash
+export IBKR_FLEX_TOKEN="your_flex_token"
+export IBKR_TRADES_QUERY_ID="your_trades_query_id"
+export IBKR_PERFORMANCE_QUERY_ID="your_performance_query_id"
+export FINANCIAL_DATASETS_API_KEY="your_api_key"
+```
 
 ### 4. 运行应用
 
-推荐使用启动脚本：
-
-```bash
-python start_app.py
-```
-
-或者直接使用 streamlit：
-
 ```bash
 streamlit run app.py
 ```
 
-应用将在浏览器中自动打开，通常地址为 `http://localhost:8501`
+## 使用指南
 
-> **提示**: 启动脚本会自动检查依赖并提供更友好的错误提示
+### 数据获取（统一方式）
 
-## 📖 使用指南
+#### 首次使用
+1. **配置API信息**: 在侧边栏配置IBKR Flex Token、Trades Query ID、Performance Query ID
+2. **设置时间范围**: 选择分析的时间段
+3. **选择基准指数**: 选择用于对比的基准指数（如SPY、QQQ）
+4. **选择数据类型**: 勾选需要获取的数据类型
+   - 📋 **交易数据**: 获取交易记录和投资组合表现
+   - 📈 **TWR数据**: 获取NAV和现金流数据，计算时间加权收益率
+   - 📊 **基准数据**: 获取基准指数数据进行对比
+5. **一键获取**: 点击"🚀 获取所有数据"按钮，系统会显示进度条和实时状态
+6. **自动缓存**: 数据获取成功后自动保存到本地CSV文件
 
-### 🔧 配置和连接
+#### 后续使用
+- **自动加载**: 启动应用时自动加载本地缓存数据
+- **快速开始**: 无需重新配置API，直接开始分析
+- **更新数据**: 需要新数据时，重新点击"🚀 获取所有数据"按钮
 
-1. **首次使用**: 在侧边栏配置您的 IBKR API 信息
-2. **测试连接**: 使用"测试连接"功能验证配置
-3. **临时配置**: 如果没有 config.yaml，可以在界面中临时输入配置
+### 分析功能
 
-### 📊 数据获取
+- **📊 交易分析**: 查看交易时间线、盈亏分析、交易量统计
+- **⏱️ TWR分析**: 专业的时间加权收益率分析，包含绩效指标仪表板
+- **🆚 基准对比**: 与SPY、QQQ等基准指数进行表现对比
+- **💬 评论管理**: 为交易添加评论和标签
+- **🔍 数据验证**: 自动检测NAV异常波动和数据质量问题
 
-1. **选择时间范围**: 使用预设选项或自定义日期范围
-2. **获取数据**: 点击"获取交易数据"按钮
-3. **查看统计**: 侧边栏会显示基本的数据统计信息
+### 缓存管理
 
-### 📋 交易记录管理
+#### 缓存文件位置
+- 所有缓存数据保存在 `cached_data/` 目录下
+- 包含以下文件：
+  - `trades_data.csv`: 交易数据
+  - `nav_data.csv`: NAV数据
+  - `cash_flow_data.csv`: 现金流数据
+  - `benchmark_data.csv`: 基准指数数据
+  - `twr_result.csv`: TWR计算结果
 
-**交易记录** 标签页提供：
+#### 缓存操作
+- **查看缓存状态**: 在侧边栏"💾 数据缓存管理"中查看
+- **重新加载缓存**: 从本地文件重新加载数据
+- **清除缓存**: 删除所有缓存文件和内存数据
+- **手动保存**: 将当前内存数据保存到CSV文件
 
-- 📝 **可编辑表格**: 直接在表格中添加或编辑交易评论
-- 🔍 **多维筛选**: 按标的、买卖方向、价格等条件筛选
-- 🔎 **评论搜索**: 在评论中搜索关键词
-- 💾 **批量保存**: 一键保存所有评论更改
-- 📥 **数据导出**: 导出筛选后的数据为 CSV 格式
+### 故障排查
 
-### 📈 图表分析
+如果数据获取失败，可以使用侧边栏的"🔧 API连接测试"功能：
+- **测试交易数据API**: 验证Trades Query配置
+- **测试TWR数据API**: 验证Performance Query配置
+- **测试基准数据API**: 验证Financial Datasets API配置
 
-**图表分析** 标签页包含：
+如果缓存数据有问题：
+- 尝试"🔄 重新加载缓存"
+- 或者"🗑️ 清除缓存"后重新获取数据
 
-- **交易时间线**: 可视化所有交易的时间和价格点
-- **盈亏分析**: 累计盈亏趋势图（简化计算）
-- **交易量分析**: 每日交易数量和金额统计
-- **标的分布**: 各标的交易金额占比
-- **评论分析**: 评论分类统计图表
+#### 缓存数据类型问题修复
 
-### 💬 评论管理
+**问题**：从缓存加载数据后，交易时间线图表可能显示为空，特别是在评论字段包含空值的情况下。
 
-**评论管理** 标签页功能：
+**解决方案**：
+- 增强了数据类型验证，确保CSV加载时的NaN值正确转换为字符串
+- 改进了图表生成器对空评论的处理
+- 在缓存加载和保存时都进行数据类型验证
 
-- 📊 **评论统计**: 总评论数、分类统计等
-- 📤 **数据导出**: 导出评论为 CSV 格式
-- 💾 **数据备份**: 手动备份评论数据
+**技术细节**：
+- `validate_trades_data_types()` 函数现在正确处理CSV中的NaN值
+- 图表生成器使用 `pd.notna()` 和安全的字符串处理
+- 评论字段的空值统一显示为"无"
 
-### 📊 统计报告
+#### TWR收益曲线缓存问题修复
 
-**统计报告** 标签页提供：
+**问题**：重新打开应用时，TWR收益曲线显示为空，即使有缓存数据。
 
-- 📈 **基础指标**: 交易笔数、手续费、交易额等
-- 📋 **按标的统计**: 各标的的详细交易统计
-- 📅 **时间统计**: 按月度的交易统计
+**原因**：TWR结果中的 `twr_timeseries` 数据（DataFrame类型）在保存时被跳过，只保存了基本数据类型。
 
-## 🗂️ 文件说明
+**解决方案**：
+- 分离保存TWR基本数据和时间序列数据到不同的CSV文件
+- 改进加载逻辑，重新组装完整的TWR结果对象
+- 更新图表生成器，支持从 `twr_timeseries` 数据生成图表
 
-```
-trade_dashboard/
-├── app.py                 # 主应用程序
-├── data_fetcher.py        # IBKR 数据获取模块
-├── comment_manager.py     # 评论管理模块
-├── chart_utils.py         # 图表工具模块
-├── benchmark_data.py      # 基准指数数据获取模块
-├── config.yaml           # 配置文件
-├── config.example.yaml   # 配置文件示例
-├── env.example           # 环境变量配置示例
-├── requirements.txt      # Python 依赖
-├── README.md            # 说明文档
-├── .gitignore           # Git 忽略文件
-├── trade_comments.json  # 评论数据（运行时生成）
-└── flex_trade_dashboard_spec.md  # 需求规格文档
-```
+**技术实现**：
+- 新增 `twr_timeseries.csv` 文件专门保存时间序列数据
+- 修改 `create_twr_chart()` 函数，支持从缓存的时间序列数据生成图表
+- 增强错误处理，避免 `NoneType` 错误
 
-## ⚠️ 注意事项
+## 技术架构
 
-1. **API 限制**: IBKR Flex API 有访问频率限制，请避免频繁刷新数据
-2. **数据安全**: 
-   - `.env` 和 `config.yaml` 文件包含敏感的 API 信息，请勿分享或提交到版本控制
-   - `.env` 文件已自动添加到 `.gitignore` 中
-   - 建议使用 `.env` 文件而非 `config.yaml` 来存储敏感信息
-3. **盈亏计算**: 图表中的盈亏计算是简化版本，实际盈亏请以券商结算为准
-4. **数据备份**: 建议定期备份 `trade_comments.json` 文件
+### 核心模块
 
-## 🔧 高级配置
+- `app.py`: 主应用界面
+- `data_fetcher.py`: IBKR数据获取
+- `twr_calculator.py`: TWR计算引擎
+- `benchmark_data.py`: 基准指数数据
+- `chart_utils.py`: 图表生成
+- `comment_manager.py`: 评论管理
 
-### 自定义配置
+### TWR计算原理
 
-编辑 `config.yaml` 中的其他选项：
+时间加权收益率(TWR)通过以下步骤计算：
 
-```yaml
-# 应用配置
-app:
-  title: "我的交易分析平台"
-  page_icon: "📊"
-  layout: "wide"
+1. **数据预处理**: 清理NAV和现金流数据
+2. **时间分割**: 按现金流事件分割时间区间
+3. **区间计算**: 计算每个子区间的收益率
+4. **几何连乘**: 将各区间收益率几何连乘得到总TWR
+5. **累计显示**: 显示从投资开始到当日的累计收益率
 
-# 数据设置
-data:
-  comments_file: "my_comments.json"
-  cache_timeout: 7200  # 缓存2小时
+### 数据验证
 
-# 图表设置
-charts:
-  default_height: 800
-  theme: "plotly_dark"  # 或 "plotly_white"
-```
+- 与IBKR官方PortfolioAnalyst对比验证
+- 支持多种Flex Query配置
+- 完整的错误处理和重试机制
 
-### 配置优先级
-
-应用程序按以下优先级加载配置：
-
-1. **环境变量**（最高优先级）
-2. **`.env` 文件**
-3. **`config.yaml` 文件**（最低优先级）
-
-您可以通过环境变量临时覆盖配置：
-
-```bash
-export IBKR_FLEX_TOKEN="your_token_here"
-export IBKR_QUERY_ID="your_query_id_here"
-export FINANCIAL_DATASETS_API_KEY="your_api_key_here"
-streamlit run app.py
-```
-
-## 🐛 故障排除
+## 故障排除
 
 ### 常见问题
 
-1. **IBKR 连接失败**
-   - 检查 Flex Token 和 Query ID 是否正确
-   - 确认 IBKR 账户是否有 Flex Query 权限
-   - 检查网络连接
+1. **API连接失败**
+   - 检查Flex Token和Query ID是否正确
+   - 确认Flex Query状态为"Active"
+   - 验证网络连接
 
-2. **无交易数据返回**
-   - 确认 Flex Query 包含 "Trades" 数据
-   - 检查查询的时间范围是否包含交易记录
-   - 验证 Query 状态是否为激活状态
+2. **TWR计算异常**
+   - 确保Performance Query包含NAV和现金流数据
+   - 检查数据时间范围设置
+   - 查看日志获取详细错误信息
 
 3. **基准数据获取失败**
-   - **问题现象**: 显示 API 连接失败或认证错误
-   - **解决方案**:
-     1. 点击 "🔗 测试 Financial Datasets API 连接" 按钮检查连接状态
-     2. 检查 API 密钥是否正确配置在 `.env` 文件中
-     3. 确认 Financial Datasets API 账户余额和权限
-     4. 如果API连接失败，可以勾选 "🧪 使用模拟数据（演示模式）" 进行功能演示
-     5. 验证网络连接，确保能访问 financialdatasets.ai
-     6. 手动测试 API 连接：
-        ```bash
-        # 设置您的API密钥
-        export FINANCIAL_DATASETS_API_KEY="your_api_key_here"
-        python -c "
-        import requests
-        headers = {'X-API-KEY': 'your_api_key_here'}
-        response = requests.get('https://api.financialdatasets.ai/prices?ticker=SPY&interval=day&limit=1', headers=headers)
-        print(response.status_code, response.text[:200])
-        "
-        ```
+   - 检查Financial Datasets API密钥
+   - 确认网络连接正常
+   - 尝试使用模拟数据
 
-4. **评论保存失败**
-   - 检查文件写入权限
-   - 确认磁盘空间充足
+## 更新日志
 
-### 基准数据功能说明
+### v2.1.5 (2024-01)
+- 🔧 **修复数据类型错误**: 解决从CSV加载数据时comment列类型不兼容的问题
+- 🛡️ **数据类型验证**: 添加自动数据类型验证和修正功能
+- 📊 **改进数据处理**: 确保所有数据在加载、保存和显示时类型正确
 
-**🆚 基准对比** 功能使用 Financial Datasets API 获取高质量的市场数据：
+### v2.1.4 (2024-01)
+- 💾 **本地数据缓存**: 自动保存获取的数据到本地CSV文件
+- 🚀 **快速启动**: 启动时自动加载缓存数据，无需重新获取
+- 📁 **缓存管理**: 可查看、重新加载、清除本地缓存数据
+- 🔄 **离线使用**: 有缓存数据时可离线进行数据分析
 
-- **实时数据**: 获取真实的市场指数数据（SPY、QQQ 等）
-- **高质量数据**: Financial Datasets API 提供更稳定可靠的金融数据服务
-- **模拟数据**: 如果 API 连接有问题，可使用模拟数据进行功能演示
-- **重试机制**: 自动重试失败的数据获取，提高成功率
-- **多指数支持**: 支持同时获取多个基准指数进行对比
-- **API 优势**: 相比传统的网页抓取方式，API 访问更稳定，数据质量更高
+### v2.1.3 (2024-01)
+- 🚀 **统一数据获取**: 将交易数据、TWR数据和基准数据合并为一个按钮获取
+- 📊 **进度可视化**: 显示数据获取进度条和实时状态
+- ⚙️ **灵活配置**: 可选择获取哪些类型的数据
+- 🔧 **独立API测试**: 将API连接测试功能独立出来，便于问题排查
 
-### 日志查看
+### v2.1.2 (2024-01)
+- 🔍 **新增数据验证功能**: 自动检测NAV异常波动和数据质量问题
+- 📊 **详细异常分析**: 分析股票和期权价值变化来源
+- 🚨 **智能异常提醒**: 自动识别超过10%的单日变化并提供分析
+- 📈 **增强调试信息**: 显示完整的NAV分量（股票多头/空头、期权多头/空头）
 
-应用会输出详细的日志信息，如果遇到问题，请查看控制台输出获取更多详情。
+### v2.1.1 (2024-01)
+- 🔧 **修复现金流异常波动问题**: 完全重写TWR时间序列计算逻辑
+- ⚡ **改进TWR计算准确性**: 使用标准时间加权收益率公式
+- 🐛 **解决一天内收益率暴涨问题**: 正确处理现金流对NAV的影响
+- 📊 **增加调试信息**: 在应用中显示详细的TWR计算过程
 
-## 📞 支持
+### v2.1.0 (2024-01)
+- 🔧 **修复TWR收益率显示问题**: 修正累计收益率计算逻辑
+- 📊 **改进基准对比**: 确保TWR和基准指数使用相同计算方式
+- 📝 **更新文档**: 添加详细的技术说明
 
-如有问题或建议，请通过以下方式联系：
+### v2.0 (2024-01)
+- ⏱️ **新增TWR分析功能**: 完整的时间加权收益率计算
+- 📈 **基准指数对比**: 支持多指数对比分析
+- 🎛️ **绩效指标仪表板**: 可视化关键绩效指标
 
-- 查看控制台日志获取详细错误信息
-- 确认所有依赖包已正确安装
-- 验证 IBKR API 配置的正确性
+### v1.0 (2023-12)
+- 📊 **基础交易分析**: 交易记录可视化和统计
+- 💬 **评论管理**: 交易评论和标签功能
+- 🔄 **数据获取**: IBKR Flex API集成
 
-## 📄 许可证
+## 贡献
 
-本项目仅供学习和个人使用。使用时请遵守 IBKR 的 API 使用条款。
+欢迎提交Issue和Pull Request来改进这个项目。
 
----
+## 许可证
 
-**免责声明**: 本工具仅用于数据分析和记录管理，不构成投资建议。所有投资决策请基于您自己的判断和风险承受能力。 
+MIT License 

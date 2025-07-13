@@ -580,13 +580,59 @@ class IBKRDataFetcher:
                         options_value = safe_float(safe_get_attr(equity_item, 'options', 0))
                         total_nav = stock_value + options_value
                         
+                        # 获取更详细的信息
+                        report_date = safe_get_attr(equity_item, 'reportDate', None)
+                        stock_long = safe_float(safe_get_attr(equity_item, 'stockLong', 0))
+                        stock_short = safe_float(safe_get_attr(equity_item, 'stockShort', 0))
+                        options_long = safe_float(safe_get_attr(equity_item, 'optionsLong', 0))
+                        options_short = safe_float(safe_get_attr(equity_item, 'optionsShort', 0))
+                        
                         nav_dict = {
-                            'reportDate': safe_get_attr(equity_item, 'reportDate', None),
+                            'reportDate': report_date,
                             'total': total_nav,
                             'currency': safe_get_attr(equity_item, 'currency', 'USD'),
                             'stock': stock_value,
-                            'options': options_value
+                            'options': options_value,
+                            'stockLong': stock_long,
+                            'stockShort': stock_short,
+                            'optionsLong': options_long,
+                            'optionsShort': options_short
                         }
+                        
+                        # 检测异常变化
+                        if nav_list:  # 如果不是第一条记录
+                            prev_nav = nav_list[-1]
+                            prev_total = prev_nav['total']
+                            nav_change = total_nav - prev_total
+                            nav_change_pct = (nav_change / prev_total * 100) if prev_total != 0 else 0
+                            
+                            # 检测异常波动
+                            if abs(nav_change_pct) > 10:  # 超过10%的变化
+                                logger.warning(f"🚨 NAV异常波动检测 {report_date}: "
+                                             f"从 ${prev_total:,.2f} 变为 ${total_nav:,.2f} "
+                                             f"(变化: ${nav_change:,.2f}, {nav_change_pct:.2f}%)")
+                                
+                                # 分析变化来源
+                                stock_change = stock_value - prev_nav['stock']
+                                options_change = options_value - prev_nav['options']
+                                
+                                logger.warning(f"   股票价值变化: ${stock_change:,.2f} "
+                                             f"(${prev_nav['stock']:,.2f} → ${stock_value:,.2f})")
+                                logger.warning(f"   期权价值变化: ${options_change:,.2f} "
+                                             f"(${prev_nav['options']:,.2f} → ${options_value:,.2f})")
+                                
+                                # 进一步分析多头和空头变化
+                                if stock_change != 0:
+                                    stock_long_change = stock_long - prev_nav.get('stockLong', 0)
+                                    stock_short_change = stock_short - prev_nav.get('stockShort', 0)
+                                    logger.warning(f"   股票多头变化: ${stock_long_change:,.2f}")
+                                    logger.warning(f"   股票空头变化: ${stock_short_change:,.2f}")
+                                
+                                if options_change != 0:
+                                    options_long_change = options_long - prev_nav.get('optionsLong', 0)
+                                    options_short_change = options_short - prev_nav.get('optionsShort', 0)
+                                    logger.warning(f"   期权多头变化: ${options_long_change:,.2f}")
+                                    logger.warning(f"   期权空头变化: ${options_short_change:,.2f}")
                         
                         logger.debug(f"处理NAV记录: {nav_dict}")
                         nav_list.append(nav_dict)
@@ -608,13 +654,59 @@ class IBKRDataFetcher:
                         options_value = safe_float(safe_get_attr(equity_item, 'options', 0))
                         total_nav = stock_value + options_value
                         
+                        # 获取更详细的信息
+                        report_date = safe_get_attr(equity_item, 'reportDate', None)
+                        stock_long = safe_float(safe_get_attr(equity_item, 'stockLong', 0))
+                        stock_short = safe_float(safe_get_attr(equity_item, 'stockShort', 0))
+                        options_long = safe_float(safe_get_attr(equity_item, 'optionsLong', 0))
+                        options_short = safe_float(safe_get_attr(equity_item, 'optionsShort', 0))
+                        
                         nav_dict = {
-                            'reportDate': safe_get_attr(equity_item, 'reportDate', None),
+                            'reportDate': report_date,
                             'total': total_nav,
                             'currency': safe_get_attr(equity_item, 'currency', 'USD'),
                             'stock': stock_value,
-                            'options': options_value
+                            'options': options_value,
+                            'stockLong': stock_long,
+                            'stockShort': stock_short,
+                            'optionsLong': options_long,
+                            'optionsShort': options_short
                         }
+                        
+                        # 检测异常变化
+                        if nav_list:  # 如果不是第一条记录
+                            prev_nav = nav_list[-1]
+                            prev_total = prev_nav['total']
+                            nav_change = total_nav - prev_total
+                            nav_change_pct = (nav_change / prev_total * 100) if prev_total != 0 else 0
+                            
+                            # 检测异常波动
+                            if abs(nav_change_pct) > 10:  # 超过10%的变化
+                                logger.warning(f"🚨 NAV异常波动检测 {report_date}: "
+                                             f"从 ${prev_total:,.2f} 变为 ${total_nav:,.2f} "
+                                             f"(变化: ${nav_change:,.2f}, {nav_change_pct:.2f}%)")
+                                
+                                # 分析变化来源
+                                stock_change = stock_value - prev_nav['stock']
+                                options_change = options_value - prev_nav['options']
+                                
+                                logger.warning(f"   股票价值变化: ${stock_change:,.2f} "
+                                             f"(${prev_nav['stock']:,.2f} → ${stock_value:,.2f})")
+                                logger.warning(f"   期权价值变化: ${options_change:,.2f} "
+                                             f"(${prev_nav['options']:,.2f} → ${options_value:,.2f})")
+                                
+                                # 进一步分析多头和空头变化
+                                if stock_change != 0:
+                                    stock_long_change = stock_long - prev_nav.get('stockLong', 0)
+                                    stock_short_change = stock_short - prev_nav.get('stockShort', 0)
+                                    logger.warning(f"   股票多头变化: ${stock_long_change:,.2f}")
+                                    logger.warning(f"   股票空头变化: ${stock_short_change:,.2f}")
+                                
+                                if options_change != 0:
+                                    options_long_change = options_long - prev_nav.get('optionsLong', 0)
+                                    options_short_change = options_short - prev_nav.get('optionsShort', 0)
+                                    logger.warning(f"   期权多头变化: ${options_long_change:,.2f}")
+                                    logger.warning(f"   期权空头变化: ${options_short_change:,.2f}")
                         
                         logger.debug(f"处理NAV记录: {nav_dict}")
                         nav_list.append(nav_dict)

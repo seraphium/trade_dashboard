@@ -422,7 +422,7 @@ class TWRCalculator:
             return self._empty_result()
 
     def _generate_twr_timeseries(self, nav_df: pd.DataFrame, periods: List[Dict], detailed_periods: List[Dict]) -> pd.DataFrame:
-        """生成每日TWR时间序列 - 基于真实NAV变化"""
+        """生成每日TWR时间序列 - 使用正确的时间加权收益率计算"""
         try:
             if nav_df.empty:
                 return pd.DataFrame()
@@ -440,62 +440,116 @@ class TWRCalculator:
                             cash_flows[cf_date] = 0
                         cash_flows[cf_date] += cf['amount']
 
-            # 计算每日TWR
-            twr_data = []
-            cumulative_twr = 1.0  # 累计TWR倍数
+            # 打印现金流汇总信息
+            if cash_flows:
+                logger.info(f"现金流汇总: {cash_flows}")
+            else:
+                logger.info("没有检测到现金流")
 
+            # 使用真正的时间加权计算方法
+            twr_data = []
+            cumulative_twr_factor = 1.0  # 累计TWR倍数，从1开始
+            
+            # 记录调整后的初始NAV（用于计算累计收益率）
+            initial_adjusted_nav = nav_df.iloc[0]['nav']
+            
             for i, (_, nav_row) in enumerate(nav_df.iterrows()):
                 current_date = nav_row['date']
                 current_nav = nav_row['nav']
+                cf_amount = cash_flows.get(current_date.date(), 0)
 
                 if i == 0:
                     # 第一天，TWR为0%
                     daily_twr_return = 0.0
-                    prev_nav = current_nav
+                    daily_return = 0.0
+                    adjusted_nav_for_calculation = current_nav
+                    
+                    logger.info(f"初始日期 {current_date.date()}: NAV={current_nav:.2f}, TWR=0.00%")
                 else:
-                    # 计算当日收益率
+                    # 获取前一天的数据
                     prev_nav = nav_df.iloc[i-1]['nav']
-
-                    # 检查是否有现金流
-                    cf_amount = cash_flows.get(current_date.date(), 0)
-
+                    prev_date = nav_df.iloc[i-1]['date']
+                    
+                    # 计算NAV变化
+                    nav_change = current_nav - prev_nav
+                    nav_change_pct = (nav_change / prev_nav * 100) if prev_nav != 0 else 0
+                    
                     if cf_amount != 0:
-                        # 有现金流的日子，需要调整计算
-                        # 假设现金流发生在日末，计算调整后的收益率
-                        adjusted_nav = current_nav - cf_amount
-                        daily_return = (adjusted_nav - prev_nav) / prev_nav if prev_nav != 0 else 0
-
-                        logger.debug(f"现金流调整 {current_date.date()}: "
-                                   f"原NAV={current_nav:.2f}, 现金流={cf_amount:.2f}, "
-                                   f"调整后NAV={adjusted_nav:.2f}, 日收益率={daily_return:.4f}")
+                        # 有现金流的日子，使用TWR标准计算方法
+                        # 假设现金流发生在日末，计算当日的投资收益率
+                        
+                        # 调整后的NAV = 当前NAV - 现金流（移除现金流影响）
+                        adjusted_current_nav = current_nav - cf_amount
+                        
+                        # 当日收益率 = (调整后当前NAV - 前日NAV) / 前日NAV
+                        daily_return = (adjusted_current_nav - prev_nav) / prev_nav if prev_nav != 0 else 0
+                        
+                        # 用于后续计算的调整NAV
+                        adjusted_nav_for_calculation = adjusted_current_nav
+                        
+                        logger.info(f"现金流日期 {current_date.date()}: "
+                                   f"前日NAV={prev_nav:.2f}, 原NAV={current_nav:.2f}, 现金流={cf_amount:.2f}, "
+                                   f"调整后NAV={adjusted_current_nav:.2f}, 日收益率={daily_return:.4f} ({daily_return*100:.2f}%)")
                     else:
                         # 无现金流，正常计算日收益率
                         daily_return = (current_nav - prev_nav) / prev_nav if prev_nav != 0 else 0
-
-                    # 更新累计TWR
-                    cumulative_twr *= (1 + daily_return)
-                    daily_twr_return = (cumulative_twr - 1) * 100
-
+                        adjusted_nav_for_calculation = current_nav
+                        
+                        # 检测异常波动
+                        if abs(daily_return) > 0.1:  # 超过10%的单日变化
+                            logger.warning(f"⚠️ 异常波动检测 {current_date.date()}: "
+                                         f"前日NAV={prev_nav:.2f}, 当日NAV={current_nav:.2f}, "
+                                         f"变化={nav_change:.2f} ({nav_change_pct:.2f}%), "
+                                         f"日收益率={daily_return:.4f} ({daily_return*100:.2f}%)")
+                            
+                            # 检查是否可能是数据错误
+                            if abs(daily_return) > 0.5:  # 超过50%的单日变化，极可能是数据错误
+                                logger.error(f"🚨 极端异常波动 {current_date.date()}: "
+                                           f"日收益率={daily_return:.4f} ({daily_return*100:.2f}%), "
+                                           f"这可能是数据错误，请检查原始数据")
+                    
+                    # 更新累计TWR倍数
+                    cumulative_twr_factor *= (1 + daily_return)
+                    
+                    # 计算累计TWR收益率（百分比）
+                    daily_twr_return = (cumulative_twr_factor - 1) * 100
+                
+                # 添加到结果
                 twr_data.append({
                     'date': current_date,
-                    'twr_return': daily_twr_return,
                     'nav': current_nav,
-                    'daily_return': daily_return if i > 0 else 0,
-                    'cash_flow': cash_flows.get(current_date.date(), 0)
+                    'daily_return': daily_return,
+                    'twr_return': daily_twr_return,
+                    'cash_flow': cf_amount,
+                    'adjusted_nav': adjusted_nav_for_calculation,
+                    'cumulative_factor': cumulative_twr_factor
                 })
-
-            if not twr_data:
-                return pd.DataFrame()
-
+            
+            # 创建DataFrame
             twr_df = pd.DataFrame(twr_data)
-
-            logger.info(f"生成真实TWR时间序列: {len(twr_df)} 个数据点")
-            logger.info(f"TWR范围: {twr_df['twr_return'].min():.2f}% 到 {twr_df['twr_return'].max():.2f}%")
-
+            
+            # 最终验证和统计
+            if not twr_df.empty:
+                max_daily_return = twr_df['daily_return'].max()
+                min_daily_return = twr_df['daily_return'].min()
+                final_twr = twr_df['twr_return'].iloc[-1]
+                
+                logger.info(f"TWR时间序列统计: "
+                           f"最大日收益率={max_daily_return:.4f} ({max_daily_return*100:.2f}%), "
+                           f"最小日收益率={min_daily_return:.4f} ({min_daily_return*100:.2f}%), "
+                           f"最终TWR={final_twr:.2f}%")
+                
+                # 检查是否有异常值
+                extreme_days = twr_df[abs(twr_df['daily_return']) > 0.1]
+                if not extreme_days.empty:
+                    logger.warning(f"发现 {len(extreme_days)} 个异常波动日:")
+                    for _, day in extreme_days.iterrows():
+                        logger.warning(f"  {day['date'].date()}: {day['daily_return']:.4f} ({day['daily_return']*100:.2f}%)")
+            
             return twr_df
-
+            
         except Exception as e:
-            logger.error(f"生成TWR时间序列失败: {e}")
+            logger.error(f"生成TWR时间序列失败: {str(e)}")
             return pd.DataFrame()
     
     def _calculate_period_return(self, period: Dict) -> Dict:

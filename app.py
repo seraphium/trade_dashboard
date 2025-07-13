@@ -28,6 +28,52 @@ st.set_page_config(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def validate_trades_data_types(df: pd.DataFrame) -> pd.DataFrame:
+    """验证并修正交易数据的数据类型"""
+    if df.empty:
+        return df
+    
+    df = df.copy()
+    
+    # 确保comment列为字符串类型 - 特别处理CSV加载时的NaN值
+    if 'comment' in df.columns:
+        # 将NaN和'nan'字符串都转换为空字符串
+        df['comment'] = df['comment'].fillna('').astype(str)
+        df['comment'] = df['comment'].replace('nan', '')
+        df['comment'] = df['comment'].replace('None', '')
+    else:
+        df['comment'] = ''
+    
+    # 确保comment_category列为字符串类型
+    if 'comment_category' in df.columns:
+        df['comment_category'] = df['comment_category'].fillna('Neutral').astype(str)
+        df['comment_category'] = df['comment_category'].replace('nan', 'Neutral')
+        df['comment_category'] = df['comment_category'].replace('None', 'Neutral')
+    else:
+        df['comment_category'] = 'Neutral'
+    
+    # 确保其他字符串列的数据类型
+    string_columns = ['trade_id', 'symbol', 'side', 'currency', 'exchange']
+    for col in string_columns:
+        if col in df.columns:
+            df[col] = df[col].fillna('').astype(str)
+            df[col] = df[col].replace('nan', '')
+            df[col] = df[col].replace('None', '')
+    
+    # 确保数值列的数据类型
+    numeric_columns = ['quantity', 'price', 'proceeds', 'commission']
+    for col in numeric_columns:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    
+    # 确保日期时间列的数据类型
+    if 'datetime' in df.columns:
+        df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+    
+    logger.debug(f"数据类型验证完成 - comment列类型: {df['comment'].dtype if 'comment' in df.columns else 'N/A'}")
+    
+    return df
+
 # 初始化会话状态
 def init_session_state():
     """初始化会话状态变量"""
@@ -53,6 +99,250 @@ def init_session_state():
         st.session_state.cash_flow_data = pd.DataFrame()
     if 'twr_result' not in st.session_state:
         st.session_state.twr_result = {}
+    
+    # 启动时自动加载本地缓存数据
+    load_cached_data()
+
+def load_cached_data():
+    """加载本地缓存的CSV数据"""
+    import os
+    
+    # 创建数据目录
+    data_dir = "cached_data"
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+    
+    # 定义文件路径
+    trades_file = os.path.join(data_dir, "trades_data.csv")
+    nav_file = os.path.join(data_dir, "nav_data.csv")
+    cash_flow_file = os.path.join(data_dir, "cash_flow_data.csv")
+    benchmark_file = os.path.join(data_dir, "benchmark_data.csv")
+    twr_file = os.path.join(data_dir, "twr_result.csv")
+    
+    try:
+        # 加载交易数据
+        if os.path.exists(trades_file):
+            trades_df = pd.read_csv(trades_file)
+            if not trades_df.empty:
+                # 验证并修正数据类型
+                trades_df = validate_trades_data_types(trades_df)
+                st.session_state.trades_df = trades_df
+                logger.info(f"✅ 加载缓存交易数据: {len(trades_df)} 条记录")
+        
+        # 加载NAV数据
+        if os.path.exists(nav_file):
+            nav_df = pd.read_csv(nav_file)
+            if not nav_df.empty:
+                # 转换日期列
+                if 'reportDate' in nav_df.columns:
+                    nav_df['reportDate'] = pd.to_datetime(nav_df['reportDate'])
+                elif 'date' in nav_df.columns:
+                    nav_df['date'] = pd.to_datetime(nav_df['date'])
+                st.session_state.nav_data = nav_df
+                logger.info(f"✅ 加载缓存NAV数据: {len(nav_df)} 条记录")
+        
+        # 加载现金流数据
+        if os.path.exists(cash_flow_file):
+            cash_df = pd.read_csv(cash_flow_file)
+            if not cash_df.empty:
+                # 转换日期列
+                if 'reportDate' in cash_df.columns:
+                    cash_df['reportDate'] = pd.to_datetime(cash_df['reportDate'])
+                if 'dateTime' in cash_df.columns:
+                    cash_df['dateTime'] = pd.to_datetime(cash_df['dateTime'])
+                st.session_state.cash_flow_data = cash_df
+                logger.info(f"✅ 加载缓存现金流数据: {len(cash_df)} 条记录")
+        
+        # 加载基准数据
+        if os.path.exists(benchmark_file):
+            benchmark_df = pd.read_csv(benchmark_file)
+            if not benchmark_df.empty:
+                # 转换日期列
+                if 'Date' in benchmark_df.columns:
+                    benchmark_df['Date'] = pd.to_datetime(benchmark_df['Date'])
+                
+                # 按symbol分组重建benchmark_data字典
+                benchmark_data = {}
+                for symbol in benchmark_df['Symbol'].unique():
+                    symbol_data = benchmark_df[benchmark_df['Symbol'] == symbol].copy()
+                    symbol_data = symbol_data.drop('Symbol', axis=1)
+                    benchmark_data[symbol] = symbol_data
+                
+                st.session_state.benchmark_data = benchmark_data
+                logger.info(f"✅ 加载缓存基准数据: {len(benchmark_data)} 个指数")
+        
+        # 加载TWR结果
+        if os.path.exists(twr_file):
+            twr_df = pd.read_csv(twr_file)
+            if not twr_df.empty:
+                # 重建TWR结果字典
+                twr_result = {}
+                for _, row in twr_df.iterrows():
+                    twr_result[row['key']] = row['value']
+                
+                # 转换数值类型
+                numeric_keys = ['total_twr', 'annualized_return', 'volatility', 'sharpe_ratio', 'max_drawdown', 'days']
+                for key in numeric_keys:
+                    if key in twr_result:
+                        try:
+                            twr_result[key] = float(twr_result[key])
+                        except (ValueError, TypeError):
+                            pass
+                
+                # 加载TWR时间序列数据
+                twr_timeseries_file = os.path.join(data_dir, "twr_timeseries.csv")
+                if os.path.exists(twr_timeseries_file):
+                    try:
+                        twr_timeseries = pd.read_csv(twr_timeseries_file)
+                        if not twr_timeseries.empty:
+                            # 转换日期列
+                            twr_timeseries['date'] = pd.to_datetime(twr_timeseries['date'])
+                            twr_result['twr_timeseries'] = twr_timeseries
+                            logger.info(f"✅ 加载TWR时间序列数据: {len(twr_timeseries)} 条记录")
+                    except Exception as e:
+                        logger.error(f"加载TWR时间序列失败: {e}")
+                
+                st.session_state.twr_result = twr_result
+                logger.info(f"✅ 加载缓存TWR结果")
+        
+        # 如果有交易数据，重新计算投资组合表现
+        if not st.session_state.trades_df.empty:
+            portfolio_data = st.session_state.benchmark_fetcher.calculate_portfolio_performance(
+                st.session_state.trades_df, 100000  # 使用默认初始资金
+            )
+            st.session_state.portfolio_data = portfolio_data
+        
+        # 如果有NAV和现金流数据，但没有TWR结果，重新计算
+        if (not st.session_state.nav_data.empty and 
+            not st.session_state.twr_result and 
+            st.session_state.twr_calculator):
+            try:
+                twr_result = st.session_state.twr_calculator.calculate_twr(
+                    st.session_state.nav_data, 
+                    st.session_state.cash_flow_data
+                )
+                st.session_state.twr_result = twr_result
+                logger.info("✅ 重新计算TWR结果")
+            except Exception as e:
+                logger.warning(f"重新计算TWR失败: {e}")
+        
+    except Exception as e:
+        logger.error(f"加载缓存数据时出错: {e}")
+        # 如果加载失败，确保session state为空
+        st.session_state.trades_df = pd.DataFrame()
+        st.session_state.nav_data = pd.DataFrame()
+        st.session_state.cash_flow_data = pd.DataFrame()
+        st.session_state.benchmark_data = {}
+        st.session_state.twr_result = {}
+
+def save_data_to_csv():
+    """保存数据到CSV文件"""
+    import os
+    
+    # 创建数据目录
+    data_dir = "cached_data"
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+    
+    try:
+        # 保存交易数据
+        if not st.session_state.trades_df.empty:
+            trades_file = os.path.join(data_dir, "trades_data.csv")
+            
+            # 确保数据类型正确再保存
+            trades_df_to_save = validate_trades_data_types(st.session_state.trades_df)
+            
+            trades_df_to_save.to_csv(trades_file, index=False)
+            logger.info(f"💾 保存交易数据到 {trades_file}")
+        
+        # 保存NAV数据
+        if not st.session_state.nav_data.empty:
+            nav_file = os.path.join(data_dir, "nav_data.csv")
+            st.session_state.nav_data.to_csv(nav_file, index=False)
+            logger.info(f"💾 保存NAV数据到 {nav_file}")
+        
+        # 保存现金流数据
+        if not st.session_state.cash_flow_data.empty:
+            cash_flow_file = os.path.join(data_dir, "cash_flow_data.csv")
+            st.session_state.cash_flow_data.to_csv(cash_flow_file, index=False)
+            logger.info(f"💾 保存现金流数据到 {cash_flow_file}")
+        
+        # 保存基准数据
+        if st.session_state.benchmark_data:
+            benchmark_file = os.path.join(data_dir, "benchmark_data.csv")
+            # 合并所有基准数据
+            all_benchmark_data = []
+            for symbol, data in st.session_state.benchmark_data.items():
+                if not data.empty:
+                    data_copy = data.copy()
+                    data_copy['Symbol'] = symbol
+                    all_benchmark_data.append(data_copy)
+            
+            if all_benchmark_data:
+                benchmark_df = pd.concat(all_benchmark_data, ignore_index=True)
+                benchmark_df.to_csv(benchmark_file, index=False)
+                logger.info(f"💾 保存基准数据到 {benchmark_file}")
+        
+        # 保存TWR结果
+        if st.session_state.twr_result:
+            twr_file = os.path.join(data_dir, "twr_result.csv")
+            twr_timeseries_file = os.path.join(data_dir, "twr_timeseries.csv")
+            
+            # 分别保存基本数据和时间序列数据
+            twr_data = []
+            for key, value in st.session_state.twr_result.items():
+                # 跳过复杂对象，只保存基本数据类型
+                if isinstance(value, (int, float, str, bool)):
+                    twr_data.append({'key': key, 'value': value})
+                elif key == 'twr_timeseries' and isinstance(value, pd.DataFrame) and not value.empty:
+                    # 单独保存TWR时间序列数据
+                    try:
+                        value.to_csv(twr_timeseries_file, index=False)
+                        logger.info(f"💾 保存TWR时间序列到 {twr_timeseries_file}")
+                    except Exception as e:
+                        logger.error(f"保存TWR时间序列失败: {e}")
+            
+            if twr_data:
+                twr_df = pd.DataFrame(twr_data)
+                twr_df.to_csv(twr_file, index=False)
+                logger.info(f"💾 保存TWR结果到 {twr_file}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"保存数据到CSV时出错: {e}")
+        return False
+
+def get_cached_data_info():
+    """获取缓存数据信息"""
+    import os
+    from datetime import datetime
+    
+    data_dir = "cached_data"
+    info = {}
+    
+    files = {
+        'trades_data.csv': '交易数据',
+        'nav_data.csv': 'NAV数据',
+        'cash_flow_data.csv': '现金流数据',
+        'benchmark_data.csv': '基准数据',
+        'twr_result.csv': 'TWR结果',
+        'twr_timeseries.csv': 'TWR时间序列'
+    }
+    
+    for filename, description in files.items():
+        filepath = os.path.join(data_dir, filename)
+        if os.path.exists(filepath):
+            stat = os.stat(filepath)
+            info[description] = {
+                'exists': True,
+                'size': stat.st_size,
+                'modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+            }
+        else:
+            info[description] = {'exists': False}
+    
+    return info
 
 def main():
     """主函数"""
@@ -60,6 +350,16 @@ def main():
     
     # 主标题
     st.title("📈 IBKR 交易复盘分析平台")
+    
+    # 显示缓存数据加载状态
+    cache_info = get_cached_data_info()
+    cached_files = [name for name, info in cache_info.items() if info['exists']]
+    
+    if cached_files:
+        st.success(f"✅ 已加载本地缓存数据: {', '.join(cached_files)}")
+    else:
+        st.info("ℹ️ 未找到本地缓存数据，请在侧边栏获取新数据")
+    
     st.markdown("---")
     
     # 侧边栏配置
@@ -186,63 +486,105 @@ def main():
             help="用于计算投资组合表现的初始资金"
         )
         
-        # 获取数据按钮
-        if st.button("🔄 获取交易数据", key="fetch_trades_data", use_container_width=True):
-            if st.session_state.data_fetcher.validate_config('trades'):
-                with st.spinner("正在获取交易数据..."):
-                    trades_df = st.session_state.data_fetcher.fetch_trades(
-                        start_date=start_date.strftime("%Y-%m-%d"),
-                        end_date=end_date.strftime("%Y-%m-%d")
-                    )
-                    if not trades_df.empty:
-                        # 合并评论
-                        trades_df = st.session_state.comment_manager.merge_comments_with_trades(trades_df)
-                        st.session_state.trades_df = trades_df
-                        
-                        # 计算投资组合表现
-                        portfolio_data = st.session_state.benchmark_fetcher.calculate_portfolio_performance(
-                            trades_df, initial_capital
+        # 获取所有数据的统一按钮
+        st.markdown("---")
+        st.subheader("🔄 数据获取")
+        
+        # 数据获取选项
+        col1, col2 = st.columns(2)
+        with col1:
+            get_trades = st.checkbox("📋 获取交易数据", value=True, help="获取交易记录和投资组合表现")
+            get_twr = st.checkbox("📈 获取TWR数据", value=True, help="获取NAV和现金流数据，计算时间加权收益率")
+        with col2:
+            get_benchmark = st.checkbox("📊 获取基准数据", value=True, help="获取基准指数数据进行对比")
+            use_mock_data = st.checkbox("🧪 使用模拟数据", value=False, help="如果网络连接有问题，可以使用模拟数据进行功能演示")
+        
+        # 统一的数据获取按钮
+        if st.button("🚀 获取所有数据", key="fetch_all_data", use_container_width=True, type="primary"):
+            success_count = 0
+            total_operations = sum([get_trades, get_twr, get_benchmark])
+            
+            if total_operations == 0:
+                st.warning("请至少选择一种数据类型")
+                return
+            
+            # 创建进度条
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            # 1. 获取交易数据
+            if get_trades:
+                status_text.text("🔄 正在获取交易数据...")
+                if st.session_state.data_fetcher.validate_config('trades'):
+                    try:
+                        trades_df = st.session_state.data_fetcher.fetch_trades(
+                            start_date=start_date.strftime("%Y-%m-%d"),
+                            end_date=end_date.strftime("%Y-%m-%d")
                         )
-                        st.session_state.portfolio_data = portfolio_data
+                        if not trades_df.empty:
+                            # 合并评论
+                            trades_df = st.session_state.comment_manager.merge_comments_with_trades(trades_df)
+                            # 验证数据类型
+                            trades_df = validate_trades_data_types(trades_df)
+                            st.session_state.trades_df = trades_df
+                            
+                            # 计算投资组合表现
+                            portfolio_data = st.session_state.benchmark_fetcher.calculate_portfolio_performance(
+                                trades_df, initial_capital
+                            )
+                            st.session_state.portfolio_data = portfolio_data
+                            
+                            st.success(f"✅ 交易数据：成功获取 {len(trades_df)} 条交易记录")
+                            success_count += 1
+                        else:
+                            st.warning("⚠️ 交易数据：未获取到数据")
+                    except Exception as e:
+                        st.error(f"❌ 交易数据获取失败：{str(e)}")
+                        logger.error(f"交易数据获取错误: {e}")
+                else:
+                    st.error("❌ 交易数据：请先配置交易数据 API 信息")
+                
+                progress_bar.progress(1 / total_operations)
+            
+            # 2. 获取TWR数据
+            if get_twr:
+                status_text.text("📈 正在获取TWR数据...")
+                if st.session_state.data_fetcher.validate_config('performance'):
+                    try:
+                        # 获取NAV数据
+                        nav_data = st.session_state.data_fetcher.fetch_nav_data(
+                            start_date=start_date.strftime("%Y-%m-%d"),
+                            end_date=end_date.strftime("%Y-%m-%d")
+                        )
                         
-                        st.success(f"✅ 成功获取 {len(trades_df)} 条交易记录")
-                    else:
-                        st.warning("未获取到交易数据")
-            else:
-                st.error("请先配置交易数据 API 信息")
-
-        # TWR数据获取按钮
-        if st.button("📈 获取 TWR 数据", key="sidebar_twr_button", use_container_width=True):
-            if st.session_state.data_fetcher.validate_config('performance'):
-                with st.spinner("正在获取TWR所需数据..."):
-                    # 获取NAV数据
-                    nav_data = st.session_state.data_fetcher.fetch_nav_data(
-                        start_date=start_date.strftime("%Y-%m-%d"),
-                        end_date=end_date.strftime("%Y-%m-%d")
-                    )
-                    
-                    # 获取现金流数据
-                    cash_data = st.session_state.data_fetcher.fetch_cash_transactions(
-                        start_date=start_date.strftime("%Y-%m-%d"),
-                        end_date=end_date.strftime("%Y-%m-%d")
-                    )
-                    
-                    if not nav_data.empty:
-                        st.session_state.nav_data = nav_data
-                        st.success(f"✅ 获取 {len(nav_data)} 条NAV记录")
-                    else:
-                        st.warning("⚠️ 未获取到NAV数据")
-                    
-                    if not cash_data.empty:
-                        st.session_state.cash_flow_data = cash_data
-                        st.success(f"✅ 获取 {len(cash_data)} 条现金流记录")
-                    else:
-                        st.info("ℹ️ 未获取到现金流数据（可能期间无现金流动）")
-                    
-                    # 如果有数据，尝试计算TWR
-                    if not nav_data.empty:
-                        try:
-                            with st.spinner("正在计算TWR..."):
+                        # 获取现金流数据
+                        cash_data = st.session_state.data_fetcher.fetch_cash_transactions(
+                            start_date=start_date.strftime("%Y-%m-%d"),
+                            end_date=end_date.strftime("%Y-%m-%d")
+                        )
+                        
+                        nav_success = False
+                        cash_success = False
+                        
+                        if not nav_data.empty:
+                            st.session_state.nav_data = nav_data
+                            st.success(f"✅ NAV数据：获取 {len(nav_data)} 条记录")
+                            nav_success = True
+                        else:
+                            st.warning("⚠️ NAV数据：未获取到数据")
+                        
+                        if not cash_data.empty:
+                            st.session_state.cash_flow_data = cash_data
+                            st.success(f"✅ 现金流数据：获取 {len(cash_data)} 条记录")
+                            cash_success = True
+                        else:
+                            st.info("ℹ️ 现金流数据：未获取到数据（可能期间无现金流动）")
+                            cash_success = True  # 没有现金流也算成功
+                        
+                        # 如果有NAV数据，计算TWR
+                        if nav_success:
+                            try:
+                                status_text.text("🧮 正在计算TWR...")
                                 twr_result = st.session_state.twr_calculator.calculate_twr(
                                     nav_data, cash_data
                                 )
@@ -253,78 +595,190 @@ def main():
                                     annualized_return = twr_result.get('annualized_return', 0)
                                     days = twr_result.get('days', 0)
                                     
-                                    st.success(f"🎯 TWR计算完成：总TWR = {total_twr:.4f}% ({days}天), 年化收益率 = {annualized_return:.2f}%")
+                                    st.success(f"🎯 TWR计算：总TWR = {total_twr:.4f}% ({days}天), 年化收益率 = {annualized_return:.2f}%")
+                                    success_count += 1
                                 else:
                                     st.error("❌ TWR计算失败")
-                        except Exception as e:
-                            st.error(f"❌ TWR计算出错: {e}")
-                            logger.error(f"TWR计算错误: {e}")
-            else:
-                st.error("请先配置性能数据 API 信息")
-        
-        # Financial Datasets API 连接测试
-        if st.button("🔗 测试 Financial Datasets API 连接", key="test_financial_api", use_container_width=True):
-            with st.spinner("正在测试连接..."):
-                if st.session_state.benchmark_fetcher.test_api_connection():
-                    st.success("✅ Financial Datasets API 连接正常")
-                else:
-                    st.error("❌ Financial Datasets API 连接失败，请检查API密钥配置")
-        
-        # 数据源选择
-        use_mock_data = st.checkbox(
-            "🧪 使用模拟数据（演示模式）",
-            help="如果网络连接有问题，可以使用模拟数据进行功能演示"
-        )
-        
-        # 获取基准数据按钮
-        if selected_benchmarks and st.button("📈 获取基准数据", key="fetch_benchmark_data", use_container_width=True):
-            with st.spinner("正在获取基准指数数据..."):
-                if use_mock_data:
-                    # 使用模拟数据
-                    st.info("📊 使用模拟数据进行演示")
-                    benchmark_data = {}
-                    for symbol in selected_benchmarks:
-                        mock_data = st.session_state.benchmark_fetcher.generate_mock_benchmark_data(
-                            symbol,
-                            start_date.strftime("%Y-%m-%d"),
-                            end_date.strftime("%Y-%m-%d")
-                        )
-                        if not mock_data.empty:
-                            benchmark_data[symbol] = mock_data
-                    
-                    st.session_state.benchmark_data = benchmark_data
-                    if benchmark_data:
-                        st.success(f"✅ 生成了 {len(benchmark_data)} 个基准指数的模拟数据: {', '.join(benchmark_data.keys())}")
-                    else:
-                        st.error("❌ 生成模拟数据失败")
+                            except Exception as e:
+                                st.error(f"❌ TWR计算出错: {e}")
+                                logger.error(f"TWR计算错误: {e}")
                         
+                    except Exception as e:
+                        st.error(f"❌ TWR数据获取失败：{str(e)}")
+                        logger.error(f"TWR数据获取错误: {e}")
                 else:
-                    # 使用真实数据
-                    if not st.session_state.benchmark_fetcher.test_api_connection():
-                        st.error("❌ Financial Datasets API 连接失败，无法获取基准数据")
-                        st.info("💡 提示：请检查您的API密钥配置。您也可以使用模拟数据进行演示。")
-                    else:
-                        benchmark_data = st.session_state.benchmark_fetcher.get_multiple_benchmarks(
-                            selected_benchmarks,
-                            start_date.strftime("%Y-%m-%d"),
-                            end_date.strftime("%Y-%m-%d")
-                        )
+                    st.error("❌ TWR数据：请先配置性能数据 API 信息")
+                
+                progress_bar.progress(2 / total_operations if total_operations > 1 else 1.0)
+            
+            # 3. 获取基准数据
+            if get_benchmark and selected_benchmarks:
+                status_text.text("📊 正在获取基准数据...")
+                try:
+                    if use_mock_data:
+                        # 使用模拟数据
+                        st.info("📊 使用模拟数据进行演示")
+                        benchmark_data = {}
+                        for symbol in selected_benchmarks:
+                            mock_data = st.session_state.benchmark_fetcher.generate_mock_benchmark_data(
+                                symbol,
+                                start_date.strftime("%Y-%m-%d"),
+                                end_date.strftime("%Y-%m-%d")
+                            )
+                            if not mock_data.empty:
+                                benchmark_data[symbol] = mock_data
+                        
                         st.session_state.benchmark_data = benchmark_data
-                        
-                        successful_symbols = [symbol for symbol, data in benchmark_data.items() if not data.empty]
-                        failed_symbols = [symbol for symbol in selected_benchmarks if symbol not in successful_symbols]
-                        
-                        if successful_symbols:
-                            st.success(f"✅ 成功获取 {len(successful_symbols)} 个基准指数数据: {', '.join(successful_symbols)}")
-                        
-                        if failed_symbols:
-                            st.warning(f"⚠️ 以下基准指数获取失败: {', '.join(failed_symbols)}")
-                            st.info("💡 提示：可以尝试重新获取或选择其他基准指数，或者使用模拟数据进行演示")
-                        
-                        if not benchmark_data:
-                            st.error("❌ 未能获取任何基准数据")
+                        if benchmark_data:
+                            st.success(f"✅ 基准数据：生成了 {len(benchmark_data)} 个基准指数的模拟数据: {', '.join(benchmark_data.keys())}")
+                            success_count += 1
+                        else:
+                            st.error("❌ 基准数据：生成模拟数据失败")
+                    else:
+                        # 使用真实数据
+                        if not st.session_state.benchmark_fetcher.test_api_connection():
+                            st.error("❌ 基准数据：Financial Datasets API 连接失败")
+                            st.info("💡 提示：请检查您的API密钥配置，或勾选'使用模拟数据'进行演示")
+                        else:
+                            benchmark_data = st.session_state.benchmark_fetcher.get_multiple_benchmarks(
+                                selected_benchmarks,
+                                start_date.strftime("%Y-%m-%d"),
+                                end_date.strftime("%Y-%m-%d")
+                            )
+                            st.session_state.benchmark_data = benchmark_data
+                            
+                            successful_symbols = [symbol for symbol, data in benchmark_data.items() if not data.empty]
+                            failed_symbols = [symbol for symbol in selected_benchmarks if symbol not in successful_symbols]
+                            
+                            if successful_symbols:
+                                st.success(f"✅ 基准数据：成功获取 {len(successful_symbols)} 个基准指数: {', '.join(successful_symbols)}")
+                                success_count += 1
+                            
+                            if failed_symbols:
+                                st.warning(f"⚠️ 基准数据：以下指数获取失败: {', '.join(failed_symbols)}")
+                            
+                            if not benchmark_data:
+                                st.error("❌ 基准数据：未能获取任何基准数据")
+                                
+                except Exception as e:
+                    st.error(f"❌ 基准数据获取失败：{str(e)}")
+                    logger.error(f"基准数据获取错误: {e}")
+                
+                progress_bar.progress(1.0)
+            elif get_benchmark and not selected_benchmarks:
+                st.warning("⚠️ 基准数据：请先选择基准指数")
+            
+            # 完成状态
+            progress_bar.progress(1.0)
+            status_text.text(f"✅ 数据获取完成！成功获取 {success_count}/{total_operations} 类数据")
+            
+            # 保存数据到CSV文件
+            if success_count > 0:
+                status_text.text("💾 正在保存数据到本地文件...")
+                if save_data_to_csv():
+                    st.success("✅ 数据已保存到本地CSV文件")
+                else:
+                    st.warning("⚠️ 数据保存失败，但内存中的数据仍可使用")
+            
+            # 清理进度显示
+            import time
+            time.sleep(2)
+            progress_bar.empty()
+            status_text.empty()
         
-
+        # 单独的API连接测试按钮
+        with st.expander("🔧 API连接测试", expanded=False):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("🔗 测试交易数据API", key="test_trades_api"):
+                    if st.session_state.data_fetcher.validate_config('trades'):
+                        with st.spinner("测试中..."):
+                            success, message = test_connection(
+                                st.session_state.data_fetcher.flex_token,
+                                st.session_state.data_fetcher.trades_query_id
+                            )
+                            if success:
+                                st.success(f"✅ {message}")
+                            else:
+                                st.error(f"❌ {message}")
+                    else:
+                        st.error("❌ 请先配置交易数据API信息")
+                
+                if st.button("📈 测试TWR数据API", key="test_twr_api"):
+                    if st.session_state.data_fetcher.validate_config('performance'):
+                        with st.spinner("测试中..."):
+                            success, message = test_connection(
+                                st.session_state.data_fetcher.flex_token,
+                                st.session_state.data_fetcher.performance_query_id
+                            )
+                            if success:
+                                st.success(f"✅ {message}")
+                            else:
+                                st.error(f"❌ {message}")
+                    else:
+                        st.error("❌ 请先配置性能数据API信息")
+            
+            with col2:
+                if st.button("📊 测试基准数据API", key="test_benchmark_api"):
+                    with st.spinner("测试中..."):
+                        if st.session_state.benchmark_fetcher.test_api_connection():
+                            st.success("✅ Financial Datasets API 连接正常")
+                        else:
+                            st.error("❌ Financial Datasets API 连接失败")
+        
+        # 数据缓存管理
+        with st.expander("💾 数据缓存管理", expanded=False):
+            st.write("**本地缓存状态:**")
+            
+            cache_info = get_cached_data_info()
+            
+            for data_type, info in cache_info.items():
+                if info['exists']:
+                    file_size = info['size'] / 1024  # 转换为KB
+                    st.write(f"✅ **{data_type}**: {file_size:.1f} KB (更新于 {info['modified']})")
+                else:
+                    st.write(f"❌ **{data_type}**: 无缓存文件")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("🔄 重新加载缓存", key="reload_cache"):
+                    with st.spinner("正在重新加载缓存数据..."):
+                        load_cached_data()
+                        st.success("✅ 缓存数据重新加载完成")
+                        st.rerun()
+            
+            with col2:
+                if st.button("🗑️ 清除缓存", key="clear_cache"):
+                    import os
+                    import shutil
+                    
+                    data_dir = "cached_data"
+                    if os.path.exists(data_dir):
+                        try:
+                            shutil.rmtree(data_dir)
+                            # 清空session state
+                            st.session_state.trades_df = pd.DataFrame()
+                            st.session_state.nav_data = pd.DataFrame()
+                            st.session_state.cash_flow_data = pd.DataFrame()
+                            st.session_state.benchmark_data = {}
+                            st.session_state.twr_result = {}
+                            st.session_state.portfolio_data = pd.DataFrame()
+                            
+                            st.success("✅ 缓存已清除")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 清除缓存失败: {e}")
+                    else:
+                        st.info("ℹ️ 没有缓存文件需要清除")
+            
+            # 手动保存当前数据
+            if st.button("💾 保存当前数据", key="save_current_data", use_container_width=True):
+                if save_data_to_csv():
+                    st.success("✅ 当前数据已保存到CSV文件")
+                else:
+                    st.error("❌ 保存失败")
         
         st.markdown("---")
         
@@ -343,6 +797,18 @@ def main():
                 commented_trades = len(df[df['comment'] != ''])
                 st.metric("已评论", commented_trades)
             
+            # TWR数据统计
+            if st.session_state.twr_result:
+                st.markdown("**TWR分析:**")
+                twr_result = st.session_state.twr_result
+                total_twr = twr_result.get('total_twr', 0)
+                annualized_return = twr_result.get('annualized_return', 0)
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("总TWR", f"{total_twr:.2f}%")
+                with col2:
+                    st.metric("年化收益率", f"{annualized_return:.2f}%")
+            
             # 基准数据统计
             if st.session_state.benchmark_data:
                 st.markdown("**基准指数数据:**")
@@ -353,7 +819,15 @@ def main():
     
     # 主内容区域
     if st.session_state.trades_df.empty:
-        st.info("👈 请在侧边栏配置 API 并获取交易数据")
+        # 检查是否有其他类型的缓存数据
+        has_nav_data = not st.session_state.nav_data.empty
+        has_benchmark_data = bool(st.session_state.benchmark_data)
+        has_twr_result = bool(st.session_state.twr_result)
+        
+        if has_nav_data or has_benchmark_data or has_twr_result:
+            st.info("📊 检测到部分缓存数据，但缺少交易数据。请在侧边栏获取完整数据或仅查看可用的分析。")
+        else:
+            st.info("👈 请在侧边栏配置 API 并获取数据，或者应用会自动加载本地缓存数据")
         
         # 显示使用说明
         st.subheader("📖 使用说明")
@@ -372,11 +846,22 @@ def main():
             - 📊 **自动数据获取**: 从 IBKR Flex API 获取历史交易
             - 📝 **交易评论**: 为每笔交易添加复盘评论
             - 📈 **可视化分析**: 多种图表展示交易表现
-            - 💾 **数据持久化**: 评论自动保存为本地文件
+            - 💾 **数据持久化**: 自动保存数据到本地CSV文件
             - 🔍 **数据筛选**: 支持多维度数据过滤和搜索
+            - 🚀 **快速启动**: 启动时自动加载缓存数据
             """)
         
-        return
+        with st.expander("3. 数据缓存功能"):
+            st.markdown("""
+            - 📁 **自动缓存**: 获取的数据自动保存到 `cached_data/` 目录
+            - 🔄 **快速加载**: 下次启动时自动加载缓存数据
+            - 💾 **离线使用**: 有缓存数据时可离线分析
+            - 🗑️ **缓存管理**: 可手动清除或重新加载缓存
+            """)
+        
+        # 如果有部分数据，仍然显示标签页让用户查看
+        if not (has_nav_data or has_benchmark_data or has_twr_result):
+            return
     
     # 创建标签页
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 交易记录", "📈 图表分析", "🆚 TWR & 基准对比", "💬 评论管理", "📊 统计报告"])
@@ -401,6 +886,9 @@ def show_trades_table():
     st.subheader("📋 交易记录")
     
     df = st.session_state.trades_df.copy()
+    
+    # 确保数据类型正确（防止从CSV加载时类型错误）
+    df = validate_trades_data_types(df)
     
     # 过滤控件
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -1155,6 +1643,124 @@ def show_twr_analysis():
             st.write("**分期收益率:**")
             for i, ret in enumerate(twr_result['period_returns']):
                 st.write(f"- 第{i+1}期: {ret:.4%}")
+        
+        # 添加TWR时间序列调试信息
+        if 'twr_timeseries' in twr_result and not twr_result['twr_timeseries'].empty:
+            st.write("**TWR时间序列调试:**")
+            twr_ts = twr_result['twr_timeseries']
+            
+            # 显示前几天和后几天的数据
+            st.write("前5天数据:")
+            debug_cols = ['date', 'nav', 'adjusted_nav', 'daily_return', 'twr_return', 'cash_flow']
+            available_cols = [col for col in debug_cols if col in twr_ts.columns]
+            if len(twr_ts) >= 5:
+                st.dataframe(twr_ts[available_cols].head(), hide_index=True)
+            
+            st.write("后5天数据:")
+            if len(twr_ts) >= 5:
+                st.dataframe(twr_ts[available_cols].tail(), hide_index=True)
+            
+            # 检查异常波动
+            if 'daily_return' in twr_ts.columns:
+                large_changes = twr_ts[abs(twr_ts['daily_return']) > 0.1]  # 超过10%的日收益率
+                if not large_changes.empty:
+                    st.warning(f"⚠️ 发现 {len(large_changes)} 天的日收益率超过10%，可能存在数据异常:")
+                    st.dataframe(large_changes[available_cols], hide_index=True)
+
+        # 数据验证和异常检测
+        with st.expander("🔍 数据验证和异常检测", expanded=False):
+            st.write("**NAV数据验证:**")
+            
+            # NAV数据统计
+            nav_data = twr_result.get('nav_data', pd.DataFrame())
+            if not nav_data.empty:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("NAV数据点", len(nav_data))
+                    st.metric("最小NAV", f"${nav_data['nav'].min():,.2f}")
+                with col2:
+                    st.metric("最大NAV", f"${nav_data['nav'].max():,.2f}")
+                    st.metric("NAV变化范围", f"{((nav_data['nav'].max() / nav_data['nav'].min() - 1) * 100):.2f}%")
+                with col3:
+                    st.metric("平均NAV", f"${nav_data['nav'].mean():,.2f}")
+                    st.metric("NAV标准差", f"${nav_data['nav'].std():,.2f}")
+                
+                # 检测异常波动
+                st.write("**异常波动检测:**")
+                
+                # 计算日收益率
+                nav_data_sorted = nav_data.sort_values('date')
+                daily_returns = nav_data_sorted['nav'].pct_change().dropna()
+                
+                # 找出异常波动（>10%的单日变化）
+                extreme_returns = daily_returns[abs(daily_returns) > 0.1]
+                
+                if not extreme_returns.empty:
+                    st.warning(f"⚠️ 发现 {len(extreme_returns)} 个异常波动日（单日变化>10%）:")
+                    
+                    for date, return_rate in extreme_returns.items():
+                        date_idx = nav_data_sorted[nav_data_sorted['date'] == date].index[0]
+                        if date_idx > 0:
+                            prev_nav = nav_data_sorted.iloc[date_idx-1]['nav']
+                            curr_nav = nav_data_sorted.iloc[date_idx]['nav']
+                            nav_change = curr_nav - prev_nav
+                            
+                            # 检查是否有现金流
+                            cf_on_date = twr_result.get('external_cash_flows', pd.DataFrame())
+                            if not cf_on_date.empty:
+                                cf_on_date = cf_on_date[cf_on_date['date'].dt.date == date.date()]
+                                cf_amount = cf_on_date['amount'].sum() if not cf_on_date.empty else 0
+                            else:
+                                cf_amount = 0
+                            
+                            st.write(f"📅 **{date.strftime('%Y-%m-%d')}**: "
+                                   f"NAV从 ${prev_nav:,.2f} 变为 ${curr_nav:,.2f} "
+                                   f"(变化: ${nav_change:,.2f}, {return_rate*100:.2f}%)")
+                            
+                            if cf_amount != 0:
+                                st.write(f"   💰 当日现金流: ${cf_amount:,.2f}")
+                            else:
+                                st.write(f"   ⚠️ 当日无现金流，可能是：")
+                                st.write(f"   - 投资收益/损失")
+                                st.write(f"   - 数据错误")
+                                st.write(f"   - 遗漏的现金流记录")
+                else:
+                    st.success("✅ 未发现异常波动，NAV数据看起来正常")
+                
+                # 显示最大的几个单日变化
+                st.write("**最大单日变化Top 5:**")
+                top_changes = daily_returns.abs().nlargest(5)
+                for date, abs_return in top_changes.items():
+                    actual_return = daily_returns[date]
+                    date_idx = nav_data_sorted[nav_data_sorted['date'] == date].index[0]
+                    if date_idx > 0:
+                        prev_nav = nav_data_sorted.iloc[date_idx-1]['nav']
+                        curr_nav = nav_data_sorted.iloc[date_idx]['nav']
+                        st.write(f"📅 {date.strftime('%Y-%m-%d')}: "
+                               f"{actual_return*100:+.2f}% "
+                               f"(${prev_nav:,.2f} → ${curr_nav:,.2f})")
+            else:
+                st.error("❌ 没有NAV数据可供验证")
+            
+            # 现金流数据验证
+            st.write("**现金流数据验证:**")
+            external_cf = twr_result.get('external_cash_flows', pd.DataFrame())
+            if not external_cf.empty:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("现金流事件", len(external_cf))
+                    st.metric("现金流入总额", f"${external_cf[external_cf['amount'] > 0]['amount'].sum():,.2f}")
+                with col2:
+                    st.metric("现金流出总额", f"${abs(external_cf[external_cf['amount'] < 0]['amount'].sum()):,.2f}")
+                    st.metric("净现金流", f"${external_cf['amount'].sum():,.2f}")
+                
+                # 显示现金流明细
+                st.write("**现金流明细:**")
+                for _, cf in external_cf.iterrows():
+                    st.write(f"📅 {cf['date'].strftime('%Y-%m-%d')}: "
+                           f"${cf['amount']:+,.2f} ({cf['type']})")
+            else:
+                st.info("ℹ️ 没有检测到外部现金流")
 
 if __name__ == "__main__":
     main() 
